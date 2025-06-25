@@ -7,6 +7,9 @@ import { initializeTheme } from './hooks/use-appearance';
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
 
+// Get CSRF token from meta tag
+const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+
 createInertiaApp({
     title: (title) => `${title} - ${appName}`,
     resolve: (name) => resolvePageComponent(`./pages/${name}.tsx`, import.meta.glob('./pages/**/*.tsx')),
@@ -18,6 +21,8 @@ createInertiaApp({
     progress: {
         color: '#4B5563',
     },
+    // Set CSRF token for all requests
+    ...(token && { csrf: token }),
 });
 
 // This will set light / dark mode on load...
