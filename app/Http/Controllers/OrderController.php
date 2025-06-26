@@ -114,6 +114,20 @@ class OrderController extends Controller
         return back()->with('success', 'Cart updated');
     }
 
+    public function applyCoupon(Request $request)
+    {
+        $validated = $request->validate([
+            'coupon_code' => 'required|string|max:50',
+        ]);
+
+        // This method is designed to return an error for Sentry testing
+        // Any coupon code will trigger an error response
+        return response()->json([
+            'error' => 'Unable to process coupon code: ' . $validated['coupon_code'] . '. This is a test error for Sentry tracking.',
+            'message' => 'Coupon processing failed'
+        ], 400);
+    }
+
     public function checkout(Request $request)
     {
         $validated = $request->validate([

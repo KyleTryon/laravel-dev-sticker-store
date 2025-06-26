@@ -1,9 +1,17 @@
 import '../css/app.css';
 
 import { createInertiaApp } from '@inertiajs/react';
+import * as Sentry from '@sentry/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { createRoot } from 'react-dom/client';
 import { initializeTheme } from './hooks/use-appearance';
+
+Sentry.init({
+    dsn: 'https://475653058bb674ed054c4a1a1041889e@o4509194194386944.ingest.us.sentry.io/4509565339893760',
+    // Setting this option to true will send default PII data to Sentry.
+    // For example, automatic IP address collection on events
+    sendDefaultPii: true,
+});
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
 

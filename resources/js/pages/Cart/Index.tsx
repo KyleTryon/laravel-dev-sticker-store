@@ -1,7 +1,13 @@
 import { Head, Link, useForm } from '@inertiajs/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { AlertCircleIcon } from 'lucide-react';
 import { Minus, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { useEffect } from 'react';
+import * as Sentry from '@sentry/react';
 
 interface Product {
     id: number;
@@ -21,13 +27,23 @@ interface CartItem {
 
 interface Props {
     cartItems: { [key: number]: CartItem };
+    errors?: { [key: string]: string };
 }
 
-export default function CartIndex({ cartItems }: Props) {
+export default function CartIndex({ cartItems, errors }: Props) {
     const { patch, delete: destroy, processing } = useForm();
+    const [couponError, setCouponError] = useState<string | null>(null);
+    const [couponProcessing, setCouponProcessing] = useState(false);
 
     // Ensure cartItems is always an object
     const safeCartItems = cartItems || {};
+
+    // Handle server-side errors
+    useEffect(() => {
+        if (errors?.error) {
+            setCouponError(errors.error);
+        }
+    }, [errors]);
 
     const updateQuantity = (productId: number, quantity: number) => {
         if (quantity <= 0) {
@@ -43,6 +59,88 @@ export default function CartIndex({ cartItems }: Props) {
 
     const removeItem = (productId: number) => {
         destroy(route('cart.remove', { product_id: productId }));
+    };
+
+    const handleApplyCoupon = (couponCode: string) => {
+        setCouponError(null); // Clear any previous errors
+        setCouponProcessing(true);
+        
+        // Wrap the entire coupon application process in a Sentry span
+        Sentry.startSpan(
+            {
+                name: `Apply Coupon: ${couponCode}`,
+                op: 'ui.action',
+                attributes: {
+                    'coupon.code': couponCode,
+                    'component': 'CartIndex',
+                    'action': 'applyCoupon',
+                    'cart.items.count': getTotalItems(),
+                    'cart.total.price': getTotalPrice().toFixed(2),
+                    'user.agent': navigator.userAgent,
+                    'timestamp': new Date().toISOString()
+                }
+            },
+            async () => {
+                // Add breadcrumb for Sentry tracking
+                Sentry.addBreadcrumb({
+                    category: 'user.action',
+                    message: 'User attempted to apply coupon code',
+                    level: 'info',
+                    data: {
+                        couponCode: couponCode,
+                        component: 'CartIndex'
+                    }
+                });
+                
+                try {
+                    // Use fetch directly to handle the JSON response
+                    const response = await fetch(route('cart.apply-coupon'), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                            'Accept': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            coupon_code: couponCode
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const data = await response.json();
+                        
+                        // Capture the error in Sentry frontend
+                        Sentry.captureException(new Error(data.error || 'Unable to process coupon code'), {
+                            tags: {
+                                location: 'frontend',
+                                component: 'CartIndex',
+                                action: 'applyCoupon',
+                                errorType: 'coupon_processing'
+                            },
+                            extra: {
+                                couponCode: couponCode,
+                                responseStatus: response.status,
+                                responseData: data,
+                                userAgent: navigator.userAgent,
+                                timestamp: new Date().toISOString()
+                            },
+                            level: 'error'
+                        });
+                        
+                        throw new Error(data.error || 'Unable to process coupon code');
+                    }
+                    
+                    const data = await response.json();
+                    // This shouldn't happen since we always return an error
+                    setCouponError('Unexpected success response');
+                    
+                } catch (error) {
+                    setCouponError(error instanceof Error ? error.message : 'Unknown error occurred');
+                } finally {
+                    setCouponProcessing(false);
+                }
+            }
+        );
     };
 
     const getTotalPrice = () => {
@@ -185,6 +283,53 @@ export default function CartIndex({ cartItems }: Props) {
                                                 <span>Shipping</span>
                                                 <span>Free</span>
                                             </div>
+                                            
+                                            {/* Coupon Code Section */}
+                                            <div className="border-t pt-4">
+                                                <div className="space-y-2">
+                                                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                        Coupon Code
+                                                    </label>
+                                                    <div className="flex space-x-2">
+                                                        <Input
+                                                            type="text"
+                                                            placeholder="Enter coupon code"
+                                                            className="flex-1"
+                                                            id="coupon-code"
+                                                            onChange={() => setCouponError(null)}
+                                                        />
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="sm"
+                                                            disabled={couponProcessing}
+                                                            onClick={() => {
+                                                                const couponCode = (document.getElementById('coupon-code') as HTMLInputElement)?.value;
+                                                                if (couponCode) {
+                                                                    handleApplyCoupon(couponCode);
+                                                                }
+                                                            }}
+                                                        >
+                                                            Apply
+                                                        </Button>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                                                        Test Sentry error tracking by entering any coupon code
+                                                    </p>
+                                                    
+                                                    {/* Error Alert */}
+                                                    {couponError && (
+                                                        <Alert variant="destructive">
+                                                            <AlertCircleIcon />
+                                                            <AlertTitle>Coupon Error</AlertTitle>
+                                                            <AlertDescription>
+                                                                {couponError}
+                                                            </AlertDescription>
+                                                        </Alert>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            
                                             <div className="border-t pt-4">
                                                 <div className="flex justify-between font-bold text-lg">
                                                     <span>Total</span>
