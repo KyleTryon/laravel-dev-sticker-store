@@ -33,7 +33,7 @@ return [
     'profiles_sample_rate' => env('SENTRY_PROFILES_SAMPLE_RATE') === null ? null : (float) env('SENTRY_PROFILES_SAMPLE_RATE'),
 
     // @see: https://docs.sentry.io/platforms/php/guides/laravel/configuration/options/#enable-logs
-    'enable_logs' => env('SENTRY_ENABLE_LOGS', false),
+    'enable_logs' => env('SENTRY_ENABLE_LOGS', true),
 
     // @see: https://docs.sentry.io/platforms/php/guides/laravel/configuration/options/#send-default-pii
     'send_default_pii' => env('SENTRY_SEND_DEFAULT_PII', false),

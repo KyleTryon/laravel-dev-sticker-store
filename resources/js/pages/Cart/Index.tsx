@@ -25,6 +25,11 @@ interface CartItem {
     price: number;
 }
 
+interface CartUpdateData {
+    product_id: number;
+    quantity: number;
+}
+
 interface Props {
     cartItems: { [key: number]: CartItem };
     errors?: { [key: string]: string };
@@ -54,7 +59,7 @@ export default function CartIndex({ cartItems, errors }: Props) {
         patch(route('cart.update'), {
             product_id: productId,
             quantity: quantity,
-        });
+        } as any);
     };
 
     const removeItem = (productId: number) => {
@@ -65,82 +70,64 @@ export default function CartIndex({ cartItems, errors }: Props) {
         setCouponError(null); // Clear any previous errors
         setCouponProcessing(true);
         
-        // Wrap the entire coupon application process in a Sentry span
-        Sentry.startSpan(
-            {
-                name: `Apply Coupon: ${couponCode}`,
-                op: 'ui.action',
-                attributes: {
-                    'coupon.code': couponCode,
-                    'component': 'CartIndex',
-                    'action': 'applyCoupon',
-                    'cart.items.count': getTotalItems(),
-                    'cart.total.price': getTotalPrice().toFixed(2),
-                    'user.agent': navigator.userAgent,
-                    'timestamp': new Date().toISOString()
-                }
+        // Add breadcrumb for Sentry tracking
+        Sentry.addBreadcrumb({
+            category: 'user.action',
+            message: 'User attempted to apply coupon code',
+            level: 'info',
+            data: {
+                couponCode: couponCode,
+                component: 'CartIndex'
+            }
+        });
+        
+        // Use fetch directly - Sentry will automatically handle trace propagation
+        fetch(route('cart.apply-coupon'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                'Accept': 'application/json',
             },
-            async () => {
-                // Add breadcrumb for Sentry tracking
-                Sentry.addBreadcrumb({
-                    category: 'user.action',
-                    message: 'User attempted to apply coupon code',
-                    level: 'info',
-                    data: {
+            body: JSON.stringify({
+                coupon_code: couponCode
+            })
+        })
+        .then(async (response) => {
+            if (!response.ok) {
+                const data = await response.json();
+                
+                // Capture the error in Sentry frontend
+                Sentry.captureException(new Error(data.error || 'Unable to process coupon code'), {
+                    tags: {
+                        location: 'frontend',
+                        component: 'CartIndex',
+                        action: 'applyCoupon',
+                        errorType: 'coupon_processing'
+                    },
+                    extra: {
                         couponCode: couponCode,
-                        component: 'CartIndex'
-                    }
+                        responseStatus: response.status,
+                        responseData: data,
+                        userAgent: navigator.userAgent,
+                        timestamp: new Date().toISOString()
+                    },
+                    level: 'error'
                 });
                 
-                try {
-                    // Use fetch directly to handle the JSON response
-                    const response = await fetch(route('cart.apply-coupon'), {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
-                            'Accept': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            coupon_code: couponCode
-                        })
-                    });
-
-                    if (!response.ok) {
-                        const data = await response.json();
-                        
-                        // Capture the error in Sentry frontend
-                        Sentry.captureException(new Error(data.error || 'Unable to process coupon code'), {
-                            tags: {
-                                location: 'frontend',
-                                component: 'CartIndex',
-                                action: 'applyCoupon',
-                                errorType: 'coupon_processing'
-                            },
-                            extra: {
-                                couponCode: couponCode,
-                                responseStatus: response.status,
-                                responseData: data,
-                                userAgent: navigator.userAgent,
-                                timestamp: new Date().toISOString()
-                            },
-                            level: 'error'
-                        });
-                        
-                        throw new Error(data.error || 'Unable to process coupon code');
-                    }
-                    
-                    const data = await response.json();
-                    // This shouldn't happen since we always return an error
-                    setCouponError('Unexpected success response');
-                    
-                } catch (error) {
-                    setCouponError(error instanceof Error ? error.message : 'Unknown error occurred');
-                } finally {
-                    setCouponProcessing(false);
-                }
+                throw new Error(data.error || 'Unable to process coupon code');
             }
-        );
+            
+            const data = await response.json();
+            // This shouldn't happen since we always return an error
+            setCouponError('Unexpected success response');
+        })
+        .catch((error) => {
+            setCouponError(error instanceof Error ? error.message : 'Unknown error occurred');
+        })
+        .finally(() => {
+            setCouponProcessing(false);
+        });
     };
 
     const getTotalPrice = () => {
