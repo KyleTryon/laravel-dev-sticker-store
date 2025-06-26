@@ -133,15 +133,10 @@ class OrderController extends Controller
             'coupon_code' => 'required|string|max:50',
         ]);
 
-        // Add breadcrumb for Sentry tracking
-        Sentry::addBreadcrumb([
-            'category' => 'coupon.processing',
-            'message' => 'Processing coupon code',
-            'level' => 'info',
-            'data' => [
-                'couponCode' => $validated['coupon_code'],
-                'component' => 'OrderController'
-            ]
+        // Log coupon processing attempt
+        Log::info('Processing coupon code', [
+            'coupon_code' => $validated['coupon_code'],
+            'user_id' => auth()->id(),
         ]);
 
         // This method is designed to throw an exception for Sentry testing
