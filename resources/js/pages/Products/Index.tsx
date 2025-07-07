@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Head, Link, useForm, router, usePage } from '@inertiajs/react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -8,10 +8,11 @@ import { Product } from '@/types';
 
 interface Props {
     products: Product[];
+    cart: { [key: number]: { quantity: number } };
     cartCount: number;
 }
 
-export default function ProductsIndex({ products, cartCount }: Props) {
+export default function ProductsIndex({ products, cart, cartCount: initialCartCount }: Props) {
     const { processing, errors } = useForm();
     const { flash } = usePage().props as any;
     
@@ -19,6 +20,23 @@ export default function ProductsIndex({ products, cartCount }: Props) {
     const [quantities, setQuantities] = useState<{ [key: number]: number }>({});
     // State to track which products are in cart
     const [productsInCart, setProductsInCart] = useState<{ [key: number]: boolean }>({});
+    // State for cart count badge
+    const [cartCount, setCartCount] = useState<number>(initialCartCount || 0);
+
+    // Initialize state from cart prop on mount
+    useEffect(() => {
+        if (cart) {
+            const initialQuantities: { [key: number]: number } = {};
+            const initialProductsInCart: { [key: number]: boolean } = {};
+            Object.entries(cart).forEach(([productId, item]) => {
+                initialQuantities[Number(productId)] = item.quantity;
+                initialProductsInCart[Number(productId)] = true;
+            });
+            setQuantities(initialQuantities);
+            setProductsInCart(initialProductsInCart);
+            setCartCount(Object.values(initialQuantities).reduce((sum, q) => sum + q, 0));
+        }
+    }, [cart]);
 
     const addToCart = (productId: number) => {
         const quantity = quantities[productId] || 1;
@@ -26,26 +44,36 @@ export default function ProductsIndex({ products, cartCount }: Props) {
             product_id: productId,
             quantity: quantity,
         };
-        
-        router.post(route('cart.add'), data);
-        
-        // Mark product as in cart and set initial quantity
-        setProductsInCart(prev => ({ ...prev, [productId]: true }));
-        setQuantities(prev => ({ ...prev, [productId]: quantity }));
+        console.log(`[Cart] Adding to cart: Product ID ${productId}, Quantity ${quantity}`);
+        router.post(route('cart.add'), data, {
+            onSuccess: () => {
+                setProductsInCart(prev => ({ ...prev, [productId]: true }));
+                setQuantities(prev => ({ ...prev, [productId]: quantity }));
+                setCartCount(prev => prev + quantity);
+            }
+        });
     };
 
     const updateQuantity = (productId: number, newQuantity: number) => {
         if (newQuantity < 0) return;
-        
         const product = products.find(p => p.id === productId);
         if (product && newQuantity > product.stock_quantity) return;
-        
-        setQuantities(prev => ({ ...prev, [productId]: newQuantity }));
-        
-        // If quantity reaches 0, remove from cart state
-        if (newQuantity === 0) {
-            setProductsInCart(prev => ({ ...prev, [productId]: false }));
-        }
+        // Send PATCH request to update cart
+        router.patch(route('cart.update'), {
+            product_id: productId,
+            quantity: newQuantity,
+        }, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setQuantities(prev => ({ ...prev, [productId]: newQuantity }));
+                if (newQuantity === 0) {
+                    setProductsInCart(prev => ({ ...prev, [productId]: false }));
+                } else {
+                    setProductsInCart(prev => ({ ...prev, [productId]: true }));
+                }
+                setCartCount(Object.values({ ...quantities, [productId]: newQuantity }).reduce((sum, q) => sum + q, 0));
+            }
+        });
     };
 
     const getQuantity = (productId: number) => {
@@ -190,6 +218,7 @@ export default function ProductsIndex({ products, cartCount }: Props) {
                                                         size="sm"
                                                         className="h-8 w-8 p-0"
                                                         onClick={() => updateQuantity(product.id, getQuantity(product.id) - 1)}
+                                                        disabled={processing}
                                                     >
                                                         <Minus className="h-3 w-3" />
                                                     </Button>
@@ -201,19 +230,11 @@ export default function ProductsIndex({ products, cartCount }: Props) {
                                                         size="sm"
                                                         className="h-8 w-8 p-0"
                                                         onClick={() => updateQuantity(product.id, getQuantity(product.id) + 1)}
+                                                        disabled={processing}
                                                     >
                                                         <Plus className="h-3 w-3" />
                                                     </Button>
                                                 </div>
-                                                <Button 
-                                                    onClick={() => addToCart(product.id)}
-                                                    disabled={processing}
-                                                    className="flex-1"
-                                                    size="sm"
-                                                >
-                                                    <ShoppingCart className="h-4 w-4 mr-2" />
-                                                    {processing ? 'Adding...' : 'Update Cart'}
-                                                </Button>
                                             </div>
                                         ) : (
                                             <Button 

@@ -1,4 +1,4 @@
-import { Head, Link, useForm } from '@inertiajs/react';
+import { Head, Link, useForm, router } from '@inertiajs/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -22,7 +22,6 @@ interface Product {
 interface CartItem {
     product: Product;
     quantity: number;
-    price: number;
 }
 
 interface CartUpdateData {
@@ -32,16 +31,24 @@ interface CartUpdateData {
 
 interface Props {
     cartItems: { [key: number]: CartItem };
+    cartCount: number;
     errors?: { [key: string]: string };
 }
 
-export default function CartIndex({ cartItems, errors }: Props) {
-    const { patch, delete: destroy, processing } = useForm();
+export default function CartIndex({ cartItems, cartCount, errors }: Props) {
+    const { delete: destroy, processing } = useForm();
     const [couponError, setCouponError] = useState<string | null>(null);
     const [couponProcessing, setCouponProcessing] = useState(false);
+    const [quantities, setQuantities] = useState<{ [key: number]: number }>({});
 
     // Ensure cartItems is always an object
     const safeCartItems = cartItems || {};
+
+    // Generate or retrieve guest user ID
+    const getGuestUserId = (): string => {
+        // For demo purposes, use a simple static guest ID
+        return 'guest';
+    };
 
     // Handle server-side errors
     useEffect(() => {
@@ -55,11 +62,24 @@ export default function CartIndex({ cartItems, errors }: Props) {
             removeItem(productId);
             return;
         }
-
-        patch(route('cart.update'), {
+        router.patch(route('cart.update'), {
             product_id: productId,
             quantity: quantity,
-        } as any);
+        }, {
+            preserveScroll: true,
+            onSuccess: (page: any) => {
+                if (page && page.props) {
+                    const updatedCart = page.props.cart || {};
+                    setQuantities(
+                        Object.fromEntries(
+                            Object.entries(updatedCart).map(([id, item]: [string, any]) => [id, item.quantity])
+                        )
+                    );
+                } else {
+                    setQuantities(prev => ({ ...prev, [productId]: quantity }));
+                }
+            }
+        });
     };
 
     const removeItem = (productId: number) => {
@@ -67,21 +87,40 @@ export default function CartIndex({ cartItems, errors }: Props) {
     };
 
     const handleApplyCoupon = (couponCode: string) => {
+        console.info(`🛒 handleApplyCoupon called with coupon code: ${couponCode}`, { couponCode });
         setCouponError(null); // Clear any previous errors
         setCouponProcessing(true);
         
-        // Add breadcrumb for Sentry tracking
-        Sentry.addBreadcrumb({
-            category: 'user.action',
-            message: 'User attempted to apply coupon code',
-            level: 'info',
-            data: {
-                couponCode: couponCode,
-                component: 'CartIndex'
+        const guestUserId = getGuestUserId();
+        console.debug(`👤 Guest user ID: ${guestUserId}`, { guestUserId });
+        
+        // Log cart information for context
+        console.debug(`🛍️ Cart information: ${getTotalItems()} items, $${getTotalPrice().toFixed(2)} total`, {
+            cartItems: safeCartItems,
+            totalItems: getTotalItems(),
+            totalPrice: getTotalPrice(),
+            itemCount: Object.keys(safeCartItems).length
+        });
+        
+        // Simulate a realistic bug where the coupon code gets lost during form processing
+        // This could happen due to state management issues, form reset, or timing problems
+        
+        // BUG: The couponCode parameter is getting lost/cleared before reaching this point
+        // This simulates a state management issue where the value is not properly passed
+        const actualCouponCode = ''; // Simulating the bug where coupon code is lost
+        
+        // Log the coupon application attempt with appropriate log level
+        console.warn(`🛒 Applying Coupon Code: ${actualCouponCode}`, {
+            userEnteredCode: actualCouponCode, // This will be empty due to the bug
+            originalParameter: couponCode, // What was originally passed (for debugging)
+            guestUserId: guestUserId,
+            cartInfo: {
+                totalItems: getTotalItems(),
+                totalPrice: getTotalPrice(),
+                itemCount: Object.keys(safeCartItems).length
             }
         });
         
-        // Use fetch directly - Sentry will automatically handle trace propagation
         fetch(route('cart.apply-coupon'), {
             method: 'POST',
             headers: {
@@ -90,23 +129,38 @@ export default function CartIndex({ cartItems, errors }: Props) {
                 'Accept': 'application/json',
             },
             body: JSON.stringify({
-                coupon_code: couponCode
+                // BUG: Sending empty string due to state management issue
+                coupon_code: actualCouponCode,
             })
         })
         .then(async (response) => {
+            console.debug(`📡 Response received: ${response.status} ${response.statusText}`, { 
+                status: response.status, 
+                statusText: response.statusText 
+            });
+            
             if (!response.ok) {
                 const data = await response.json();
+                console.error(`❌ Error response data: ${data.error || 'Unknown error'}`, data);
                 
                 // Capture the error in Sentry frontend
-                Sentry.captureException(new Error(data.error || 'Unable to process coupon code'), {
+                Sentry.captureException(new Error(data.error || 'Invalid coupon code'), {
                     tags: {
                         location: 'frontend',
                         component: 'CartIndex',
                         action: 'applyCoupon',
-                        errorType: 'coupon_processing'
+                        errorType: 'coupon_validation',
+                        userType: 'guest'
                     },
                     extra: {
-                        couponCode: couponCode,
+                        userEnteredCouponCode: actualCouponCode, // What user actually entered (empty due to bug)
+                        originalParameter: couponCode, // What was originally passed (for debugging)
+                        guestUserId: guestUserId,
+                        cartInfo: {
+                            totalItems: getTotalItems(),
+                            totalPrice: getTotalPrice(),
+                            itemCount: Object.keys(safeCartItems).length
+                        },
                         responseStatus: response.status,
                         responseData: data,
                         userAgent: navigator.userAgent,
@@ -115,24 +169,33 @@ export default function CartIndex({ cartItems, errors }: Props) {
                     level: 'error'
                 });
                 
-                throw new Error(data.error || 'Unable to process coupon code');
+
+                console.warn(`🚨 Sentry error captured for coupon validation failure: ${data.error || 'Unknown error'}`);
+                throw new Error(data.error || 'Invalid coupon code');
             }
             
             const data = await response.json();
+            console.warn(`✅ Unexpected success response: ${JSON.stringify(data)}`, data);
             // This shouldn't happen since we always return an error
             setCouponError('Unexpected success response');
         })
         .catch((error) => {
-            setCouponError(error instanceof Error ? error.message : 'Unknown error occurred');
+            console.error(`💥 Caught error: ${error.message}`, { error: error.message });
+            setCouponError(error instanceof Error ? error.message : 'Invalid coupon code');
         })
         .finally(() => {
+            console.debug(`🏁 Coupon processing finished for user: ${guestUserId}`, { guestUserId });
             setCouponProcessing(false);
         });
     };
 
+    const handleCheckout = () => {
+        console.log('Checking out:', cartItemsArray);
+    };
+
     const getTotalPrice = () => {
         return Object.values(safeCartItems).reduce((total, item) => {
-            return total + (item.price * item.quantity);
+            return total + (item.product.price * item.quantity);
         }, 0);
     };
 
@@ -214,7 +277,7 @@ export default function CartIndex({ cartItems, errors }: Props) {
                                                             {item.product.category}
                                                         </p>
                                                         <p className="text-lg font-bold text-green-600">
-                                                            ${item.price}
+                                                            ${item.product.price}
                                                         </p>
                                                     </div>
                                                     <div className="flex items-center space-x-2">
@@ -327,6 +390,7 @@ export default function CartIndex({ cartItems, errors }: Props) {
                                                 className="w-full" 
                                                 size="lg"
                                                 disabled={processing}
+                                                onClick={handleCheckout}
                                             >
                                                 Proceed to Checkout
                                             </Button>

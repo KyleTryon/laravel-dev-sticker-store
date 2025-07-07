@@ -8,6 +8,7 @@ import { initializeTheme } from './hooks/use-appearance';
 
 Sentry.init({
     dsn: 'https://475653058bb674ed054c4a1a1041889e@o4509194194386944.ingest.us.sentry.io/4509565339893760',
+    _experiments: { enableLogs: true },
     // Setting this option to true will send default PII data to Sentry.
     // For example, automatic IP address collection on events
     sendDefaultPii: true,
@@ -21,6 +22,7 @@ Sentry.init({
         Sentry.browserTracingIntegration({
             ignoreResourceSpans: ['resource.link']
         }),
+        Sentry.consoleLoggingIntegration({ levels: ["log", "error", "warn"] }),
         Sentry.replayIntegration({
             // Additional SDK configuration goes in here, for example:
             maskAllText: false,

@@ -10,15 +10,9 @@ class ProductController extends Controller
 {
     public function index()
     {
-        $products = Product::where('is_active', true)->get();
+        $products = Product::all();
         $cart = session()->get('cart', []);
-        
-        // Calculate total quantity of all items in cart
-        $cartCount = 0;
-        foreach ($cart as $item) {
-            $cartCount += $item['quantity'];
-        }
-        
+        $cartCount = array_sum(array_column($cart, 'quantity'));
         $flash = [
             'success' => session('success'),
             'error' => session('error'),
@@ -26,6 +20,7 @@ class ProductController extends Controller
         
         return Inertia::render('Products/Index', [
             'products' => $products,
+            'cart' => $cart,
             'cartCount' => $cartCount,
             'flash' => $flash
         ]);

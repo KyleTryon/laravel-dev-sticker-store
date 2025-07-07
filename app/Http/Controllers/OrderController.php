@@ -15,12 +15,14 @@ class OrderController extends Controller
     public function cart()
     {
         $cart = session()->get('cart', []);
-        
+        $cartCount = array_sum(array_column($cart, 'quantity'));
         // Handle old cart structure and convert to new structure
         if (is_array($cart) && array_key_exists('cart_count', $cart) && array_key_exists('cart_items', $cart)) {
             Log::info('Cart structure migrated from old format', [
                 'old_cart_count' => $cart['cart_count'] ?? 0,
                 'old_cart_items' => count($cart['cart_items'] ?? []),
+                'user_id' => auth()->id(),
+                'user_type' => auth()->id() ? 'authenticated' : 'guest',
             ]);
             // This is the old structure, convert to new empty structure
             $cart = [];
@@ -32,13 +34,15 @@ class OrderController extends Controller
             'cart_item_count' => count($cart),
             'cart_total_items' => array_sum(array_column($cart, 'quantity')),
             'cart_total_value' => array_sum(array_map(function($item) {
-                return $item['price'] * $item['quantity'];
+                return $item['product']['price'] * $item['quantity'];
             }, $cart)),
             'user_id' => auth()->id(),
+            'user_type' => auth()->id() ? 'authenticated' : 'guest',
         ]);
         
         return Inertia::render('Cart/Index', [
-            'cartItems' => $cart
+            'cartItems' => $cart,
+            'cartCount' => $cartCount,
         ]);
     }
 
@@ -67,25 +71,22 @@ class OrderController extends Controller
                     'category' => $product->category,
                 ],
                 'quantity' => $validated['quantity'],
-                'price' => $product->price,
             ];
         }
         session()->put('cart', $cart);
         
         // Log cart addition metrics
-        Log::info('Product added to cart', [
+        Log::info('Product added to cart (homepage)', [
             'product_id' => $product->id,
             'product_name' => $product->name,
-            'quantity_added' => $validated['quantity'],
             'product_price' => $product->price,
-            'cart_total_items' => array_sum(array_column($cart, 'quantity')),
-            'cart_total_value' => array_sum(array_map(function($item) {
-                return $item['price'] * $item['quantity'];
-            }, $cart)),
+            'product_category' => $product->category,
+            'quantity_added' => $validated['quantity'],
             'user_id' => auth()->id(),
+            'user_id' => 'guest',
         ]);
 
-        return redirect()->route('home')->with('success', 'Product added to cart successfully!');
+        return redirect()->route('home');
     }
 
     public function removeFromCart(Request $request)
@@ -105,16 +106,17 @@ class OrderController extends Controller
         
         // Log cart removal metrics
         if ($removedItem) {
-            Log::info('Product removed from cart', [
+            Log::info('Product removed from cart (homepage)', [
                 'product_id' => $validated['product_id'],
-                'product_name' => $removedItem['product']['name'] ?? 'Unknown',
                 'quantity_removed' => $removedItem['quantity'],
-                'product_price' => $removedItem['price'],
-                'cart_total_items' => array_sum(array_column($cart, 'quantity')),
-                'cart_total_value' => array_sum(array_map(function($item) {
-                    return $item['price'] * $item['quantity'];
-                }, $cart)),
                 'user_id' => auth()->id(),
+            ]);
+        }
+
+        // Log if cart is now empty
+        if (empty($cart)) {
+            Log::info('Cart emptied', [
+                'user_id' => 'guest',
             ]);
         }
 
@@ -123,25 +125,95 @@ class OrderController extends Controller
 
     public function updateCartQuantity(Request $request)
     {
-        // For this structure, you may want to ignore or remove this method, or adapt it if you want to track quantities
-        return back()->with('success', 'Cart updated');
+        $validated = $request->validate([
+            'product_id' => 'required|integer',
+            'quantity' => 'required|integer|min:1',
+        ]);
+
+        $cart = session()->get('cart', []);
+        if (isset($cart[$validated['product_id']])) {
+            $cart[$validated['product_id']]['quantity'] = $validated['quantity'];
+            session()->put('cart', $cart);
+        }
+
+        return redirect()->back();
     }
 
     public function applyCoupon(Request $request)
     {
+        // Log the incoming request, now with cart info and coupon code value if present
+        $cart = session()->get('cart', []);
+        $couponCodeValue = $request->input('coupon_code', null);
+        $couponCodeForLog = $couponCodeValue !== null && $couponCodeValue !== '' ? $couponCodeValue : 'null';
+        Log::info('Coupon application request received', [
+            'coupon_code_custom' => $couponCodeForLog,
+            'test_field_abc123' => 'should_appear_in_sentry',
+            'debug_info' => 'debug',
+            'user_id' => 'guest',
+            'cart' => $cart,
+        ]);
+
+        $couponCode = $request->input('coupon_code');
+        $userId = 'guest';
+
+        // Check if coupon code is empty (simulating the frontend bug) - BEFORE validation
+        if (empty(trim($couponCode))) {
+            Log::warning('Empty coupon code received', [
+                'received_value' => $couponCode,
+                'received_length' => strlen($couponCode),
+                'user_id' => $userId,
+                'user_type' => 'guest',
+                'cart_context' => [
+                    'items_count' => count($cart),
+                    'total_items' => array_sum(array_column($cart, 'quantity')),
+                    'total_value' => array_sum(array_map(function($item) {
+                        return $item['product']['price'] * $item['quantity'];
+                    }, $cart)),
+                ],
+                'session_id' => session()->getId(),
+            ]);
+            
+            return response()->json([
+                'error' => 'Please enter a valid coupon code',
+                'message' => 'Coupon code cannot be empty'
+            ], 400);
+        }
+
+        // Validate the coupon code format (only for non-empty codes)
         $validated = $request->validate([
             'coupon_code' => 'required|string|max:50',
         ]);
 
-        // Log coupon processing attempt
         Log::info('Processing coupon code', [
             'coupon_code' => $validated['coupon_code'],
-            'user_id' => auth()->id(),
+            'coupon_code_length' => strlen($validated['coupon_code']),
+            'user_id' => $userId,
+            'cart_count' => count($cart),
+            'test_field_abc123' => 'should_appear_in_sentry'
         ]);
 
+        $couponCode = $validated['coupon_code'];
+
         // This method is designed to throw an exception for Sentry testing
-        // Any coupon code will trigger an exception
-        throw new \Exception('Unable to process coupon code: ' . $validated['coupon_code'] . '. This is a test error for Sentry distributed tracing.');
+        // Any non-empty coupon code will trigger an exception
+        Log::error('Coupon validation failed - throwing test exception for Sentry', [
+            'coupon_code' => $couponCode,
+            'user_id' => $userId,
+            'user_type' => 'guest',
+            'cart_context' => [
+                'items_count' => count($cart),
+                'total_items' => array_sum(array_column($cart, 'quantity')),
+                'total_value' => array_sum(array_map(function($item) {
+                    return $item['product']['price'] * $item['quantity'];
+                }, $cart)),
+            ],
+            'session_id' => session()->getId(),
+        ]);
+
+        return response()->json([
+            'error' => 'Invalid coupon code',
+            'message' => 'The coupon code "' . $couponCode . '" is not valid'
+        ], 400);
     }
 
     public function checkout(Request $request)
@@ -166,8 +238,17 @@ class OrderController extends Controller
 
         $totalAmount = 0;
         foreach ($cart as $item) {
-            $totalAmount += $item['price'] * $item['quantity'];
+            $totalAmount += $item['product']['price'] * $item['quantity'];
         }
+
+        // Log order processing interaction
+        Log::info('Processing order', [
+            'user_id' => Auth::id(),
+            'cart_count' => count($cart),
+            'total_amount' => $totalAmount,
+            'shipping_country' => $validated['shipping_address']['country'],
+            'payment_method' => $validated['payment_method'],
+        ]);
 
         // Create order
         $order = Order::create([
@@ -185,7 +266,7 @@ class OrderController extends Controller
                 'order_id' => $order->id,
                 'product_id' => $productId,
                 'quantity' => $item['quantity'],
-                'price' => $item['price'],
+                'price' => $item['product']['price'],
             ]);
 
             // Update product stock
