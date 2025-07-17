@@ -21,8 +21,8 @@ class OrderController extends Controller
             Log::info('Cart structure migrated from old format', [
                 'old_cart_count' => $cart['cart_count'] ?? 0,
                 'old_cart_items' => count($cart['cart_items'] ?? []),
-                'user_id' => auth()->id(),
-                'user_type' => auth()->id() ? 'authenticated' : 'guest',
+                            'user_id' => 'guest',
+            'user_type' => 'guest',
             ]);
             // This is the old structure, convert to new empty structure
             $cart = [];
@@ -36,8 +36,8 @@ class OrderController extends Controller
             'cart_total_value' => array_sum(array_map(function($item) {
                 return $item['product']['price'] * $item['quantity'];
             }, $cart)),
-            'user_id' => auth()->id(),
-            'user_type' => auth()->id() ? 'authenticated' : 'guest',
+            'user_id' => 'guest',
+            'user_type' => 'guest',
         ]);
         
         return Inertia::render('Cart/Index', [
@@ -82,7 +82,7 @@ class OrderController extends Controller
             'product_price' => $product->price,
             'product_category' => $product->category,
             'quantity_added' => $validated['quantity'],
-            'user_id' => auth()->id(),
+            'user_id' => 'guest',
             'user_id' => 'guest',
         ]);
 
@@ -109,7 +109,7 @@ class OrderController extends Controller
             Log::info('Product removed from cart (homepage)', [
                 'product_id' => $validated['product_id'],
                 'quantity_removed' => $removedItem['quantity'],
-                'user_id' => auth()->id(),
+                'user_id' => 'guest',
             ]);
         }
 
@@ -156,7 +156,7 @@ class OrderController extends Controller
         $couponCode = $request->input('coupon_code');
         $userId = 'guest';
 
-        // Check if coupon code is empty (simulating the frontend bug) - BEFORE validation
+        // Check if coupon code is empty
         if (empty(trim($couponCode))) {
             Log::warning('Empty coupon code received', [
                 'received_value' => $couponCode,
@@ -196,7 +196,7 @@ class OrderController extends Controller
 
         // This method is designed to throw an exception for Sentry testing
         // Any non-empty coupon code will trigger an exception
-        Log::error('Coupon validation failed - throwing test exception for Sentry', [
+        Log::error('Coupon validation failed', [
             'coupon_code' => $couponCode,
             'user_id' => $userId,
             'user_type' => 'guest',
@@ -243,7 +243,7 @@ class OrderController extends Controller
 
         // Log order processing interaction
         Log::info('Processing order', [
-            'user_id' => Auth::id(),
+            'user_id' => 'guest',
             'cart_count' => count($cart),
             'total_amount' => $totalAmount,
             'shipping_country' => $validated['shipping_address']['country'],
@@ -252,7 +252,7 @@ class OrderController extends Controller
 
         // Create order
         $order = Order::create([
-            'user_id' => Auth::id(),
+            'user_id' => 'guest',
             'total_amount' => $totalAmount,
             'status' => 'pending',
             'shipping_address' => $validated['shipping_address'],
@@ -280,7 +280,7 @@ class OrderController extends Controller
         // Log checkout completion metrics
         Log::info('Order completed successfully', [
             'order_id' => $order->id,
-            'user_id' => Auth::id(),
+            'user_id' => 'guest',
             'total_amount' => $totalAmount,
             'payment_method' => $validated['payment_method'],
             'shipping_country' => $validated['shipping_address']['country'],

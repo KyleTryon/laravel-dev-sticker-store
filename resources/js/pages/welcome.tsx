@@ -43,7 +43,11 @@ export default function Welcome({ products }: Props) {
                 alert('Failed to add product to cart');
             }
         } catch (error) {
-            console.error('Error adding to cart:', error);
+            console.error('Error adding to cart:', {
+                errorMessage: error instanceof Error ? error.message : 'Unknown error',
+                errorName: error instanceof Error ? error.name : 'Error',
+                errorStack: error instanceof Error ? error.stack : undefined
+            });
             alert('Error adding to cart');
         }
     };

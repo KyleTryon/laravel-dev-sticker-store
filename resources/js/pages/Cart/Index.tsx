@@ -96,7 +96,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
         
         // Log cart information for context
         console.debug(`🛍️ Cart information: ${getTotalItems()} items, $${getTotalPrice().toFixed(2)} total`, {
-            cartItems: safeCartItems,
+            cartItems: JSON.stringify(safeCartItems),
             totalItems: getTotalItems(),
             totalPrice: getTotalPrice(),
             itemCount: Object.keys(safeCartItems).length
@@ -114,11 +114,9 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             userEnteredCode: actualCouponCode, // This will be empty due to the bug
             originalParameter: couponCode, // What was originally passed (for debugging)
             guestUserId: guestUserId,
-            cartInfo: {
-                totalItems: getTotalItems(),
-                totalPrice: getTotalPrice(),
-                itemCount: Object.keys(safeCartItems).length
-            }
+            totalItems: getTotalItems(),
+            totalPrice: getTotalPrice(),
+            itemCount: Object.keys(safeCartItems).length
         });
         
         fetch(route('cart.apply-coupon'), {
@@ -141,7 +139,12 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             
             if (!response.ok) {
                 const data = await response.json();
-                console.error(`❌ Error response data: ${data.error || 'Unknown error'}`, data);
+                console.error(`❌ Error response data: ${data.error || 'Unknown error'}`, {
+                    error: data.error || 'Unknown error',
+                    message: data.message || '',
+                    status: response.status,
+                    statusText: response.statusText
+                });
                 
                 // Capture the error in Sentry frontend
                 Sentry.captureException(new Error(data.error || 'Invalid coupon code'), {
@@ -156,13 +159,11 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                         userEnteredCouponCode: actualCouponCode, // What user actually entered (empty due to bug)
                         originalParameter: couponCode, // What was originally passed (for debugging)
                         guestUserId: guestUserId,
-                        cartInfo: {
-                            totalItems: getTotalItems(),
-                            totalPrice: getTotalPrice(),
-                            itemCount: Object.keys(safeCartItems).length
-                        },
+                        totalItems: getTotalItems(),
+                        totalPrice: getTotalPrice(),
+                        itemCount: Object.keys(safeCartItems).length,
                         responseStatus: response.status,
-                        responseData: data,
+                        responseData: JSON.stringify(data),
                         userAgent: navigator.userAgent,
                         timestamp: new Date().toISOString()
                     },
@@ -175,12 +176,18 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             }
             
             const data = await response.json();
-            console.warn(`✅ Unexpected success response: ${JSON.stringify(data)}`, data);
+            console.warn(`✅ Unexpected success response: ${JSON.stringify(data)}`, {
+                responseData: JSON.stringify(data)
+            });
             // This shouldn't happen since we always return an error
             setCouponError('Unexpected success response');
         })
         .catch((error) => {
-            console.error(`💥 Caught error: ${error.message}`, { error: error.message });
+            console.error(`💥 Caught error: ${error.message}`, { 
+                errorMessage: error.message,
+                errorName: error.name,
+                errorStack: error.stack
+            });
             setCouponError(error instanceof Error ? error.message : 'Invalid coupon code');
         })
         .finally(() => {
@@ -190,7 +197,11 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
     };
 
     const handleCheckout = () => {
-        console.log('Checking out:', cartItemsArray);
+        console.log('Checking out:', {
+            cartItemsCount: cartItemsArray.length,
+            totalItems: getTotalItems(),
+            totalPrice: getTotalPrice()
+        });
     };
 
     const getTotalPrice = () => {
