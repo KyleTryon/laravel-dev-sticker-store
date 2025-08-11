@@ -218,12 +218,15 @@ class OrderController extends Controller
 
     public function estimateShipping(Request $request)
     {
-        // Log the incoming request with cart info and zip code value if present
+        // Log the incoming request with cart info and both zip code and country values if present
         $cart = session()->get('cart', []);
         $zipCodeValue = $request->input('zip_code', null);
+        $countryValue = $request->input('country', null);
         $zipCodeForLog = $zipCodeValue !== null && $zipCodeValue !== '' ? $zipCodeValue : 'null';
+        $countryForLog = $countryValue !== null && $countryValue !== '' ? $countryValue : 'null';
         Log::info('Shipping estimation request received', [
             'zip_code_custom' => $zipCodeForLog,
+            'country_custom' => $countryForLog,
             'test_field_shipping123' => 'should_appear_in_sentry',
             'debug_info' => 'shipping_debug',
             'user_id' => 'guest',
@@ -231,6 +234,7 @@ class OrderController extends Controller
         ]);
 
         $zipCode = $request->input('zip_code');
+        $country = $request->input('country', '');
         $userId = 'guest';
 
         // Check if zip code is empty
@@ -238,6 +242,7 @@ class OrderController extends Controller
             Log::warning('Empty zip code received', [
                 'received_value' => $zipCode,
                 'received_length' => strlen($zipCode),
+                'country' => $country,
                 'user_id' => $userId,
                 'user_type' => 'guest',
                 'cart_context' => [
@@ -256,25 +261,29 @@ class OrderController extends Controller
             ], 400);
         }
 
-        // Validate the zip code format (only for non-empty codes)
+        // Validate the zip code and country format
         $validated = $request->validate([
             'zip_code' => 'required|string|max:10',
+            'country' => 'nullable|string|max:50',
         ]);
 
-        Log::info('Processing zip code for shipping estimation', [
+        Log::info('Processing zip code and country for shipping estimation', [
             'zip_code' => $validated['zip_code'],
             'zip_code_length' => strlen($validated['zip_code']),
+            'country' => $validated['country'] ?? 'none',
             'user_id' => $userId,
             'cart_count' => count($cart),
             'test_field_shipping123' => 'should_appear_in_sentry'
         ]);
 
         $zipCode = $validated['zip_code'];
+        $country = $validated['country'] ?? '';
 
         // This method is designed to throw an exception for Sentry testing
-        // Any zip code will trigger a believable shipping error
-        Log::error('Shipping estimation failed - zip code not serviceable', [
+        // Complex validation: Only "United States" with zip code should theoretically work, but we'll always error
+        Log::error('Shipping estimation failed - country/zip validation error', [
             'zip_code' => $zipCode,
+            'country' => $country,
             'user_id' => $userId,
             'user_type' => 'guest',
             'cart_context' => [
@@ -286,24 +295,35 @@ class OrderController extends Controller
             ],
             'session_id' => session()->getId(),
             'shipping_service' => 'test_shipping_api',
-            'error_type' => 'zip_code_not_found'
+            'error_type' => 'country_zip_validation_failed'
         ]);
 
-        // Generate believable shipping error messages based on zip code patterns
-        $errorMessage = 'Sorry, we do not currently ship to ZIP code ' . $zipCode;
+        // Generate believable shipping error messages based on country and zip code combination
+        $errorMessage = 'Unable to estimate shipping costs';
         
-        // Add some variety to the error messages to make them more realistic
-        if (preg_match('/^9/', $zipCode)) {
-            $errorMessage = 'Shipping to ZIP code ' . $zipCode . ' is temporarily unavailable due to carrier restrictions';
-        } elseif (preg_match('/^0/', $zipCode)) {
-            $errorMessage = 'ZIP code ' . $zipCode . ' could not be verified with our shipping provider';
-        } elseif (strlen($zipCode) < 5) {
-            $errorMessage = 'Please enter a valid 5-digit ZIP code';
+        if (empty($country)) {
+            $errorMessage = 'Please select a country to estimate shipping costs';
+        } elseif ($country !== 'United States') {
+            $errorMessage = 'ZIP code format is not valid for ' . $country . '. Please check your postal code format';
+        } elseif ($country === 'United States') {
+            // Even for US, we'll generate errors based on zip code patterns for demo
+            if (preg_match('/^9/', $zipCode)) {
+                $errorMessage = 'Shipping to ZIP code ' . $zipCode . ' is temporarily unavailable due to carrier restrictions';
+            } elseif (preg_match('/^0/', $zipCode)) {
+                $errorMessage = 'ZIP code ' . $zipCode . ' could not be verified with our shipping provider';
+            } elseif (strlen($zipCode) < 5) {
+                $errorMessage = 'Please enter a valid 5-digit ZIP code';
+            } elseif (preg_match('/[X]/', $zipCode)) {
+                // This catches the corrupted zip codes from frontend bug
+                $errorMessage = 'Invalid ZIP code format detected. Please enter only numbers';
+            } else {
+                $errorMessage = 'Sorry, we do not currently ship to ZIP code ' . $zipCode;
+            }
         }
 
         return response()->json([
             'error' => $errorMessage,
-            'message' => 'Unable to estimate shipping costs for the provided ZIP code'
+            'message' => 'Unable to estimate shipping costs for the provided country and ZIP code combination'
         ], 400);
     }
 

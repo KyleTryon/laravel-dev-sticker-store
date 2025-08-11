@@ -2,6 +2,7 @@ import { Head, Link, useForm, router } from '@inertiajs/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertCircleIcon } from 'lucide-react';
 import { Minus, Plus, Trash2 } from 'lucide-react';
@@ -41,6 +42,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
     const [couponProcessing, setCouponProcessing] = useState(false);
     const [shippingError, setShippingError] = useState<string | null>(null);
     const [shippingProcessing, setShippingProcessing] = useState(false);
+    const [selectedCountry, setSelectedCountry] = useState<string>('');
     const [quantities, setQuantities] = useState<{ [key: number]: number }>({});
 
     // Ensure cartItems is always an object
@@ -201,8 +203,8 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
         });
     };
 
-    const handleEstimateShipping = (zipCode: string) => {
-        console.info(`📦 handleEstimateShipping called with zip code: ${zipCode}`, { zipCode });
+    const handleEstimateShipping = (zipCode: string, country: string) => {
+        console.info(`📦 handleEstimateShipping called with zip code: ${zipCode}, country: ${country}`, { zipCode, country });
         setShippingError(null); // Clear any previous errors
         setShippingProcessing(true);
         
@@ -217,17 +219,25 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             itemCount: Object.keys(safeCartItems).length
         });
         
-        // Simulate a realistic bug where the zip code gets corrupted during processing
-        // This could happen due to validation issues, encoding problems, or data transformation
+        // Simulate a realistic bug where the country selection gets lost during form processing
+        // This could happen due to state management issues, form reset, or timing problems
         
-        // BUG: The zipCode parameter is getting corrupted before reaching this point
-        // This simulates a data corruption issue where zip codes are not properly handled
-        const corruptedZipCode = zipCode.replace(/\d/g, 'X'); // Replace digits with X to simulate corruption
+        // BUG: The country parameter is getting lost/reset before reaching this point
+        // This simulates a state management issue where the country selection is not properly passed
+        const actualCountry = ''; // Simulating the bug where country selection is lost
+        
+        // Also simulate zip code corruption for non-US countries
+        let processedZipCode = zipCode;
+        if (country !== 'United States' && country !== '') {
+            processedZipCode = zipCode.replace(/\d/g, 'X'); // Replace digits with X to simulate corruption
+        }
         
         // Log the shipping estimation attempt with appropriate log level
-        console.warn(`📦 Estimating Shipping for Zip Code: ${corruptedZipCode}`, {
-            userEnteredZip: corruptedZipCode, // This will be corrupted due to the bug
-            originalParameter: zipCode, // What was originally passed (for debugging)
+        console.warn(`📦 Estimating Shipping for Zip Code: ${processedZipCode}, Country: ${actualCountry}`, {
+            userEnteredZip: processedZipCode, // This may be corrupted due to the bug
+            userEnteredCountry: actualCountry, // This will be empty due to the bug
+            originalZipParameter: zipCode, // What was originally passed (for debugging)
+            originalCountryParameter: country, // What was originally passed (for debugging)
             guestUserId: guestUserId,
             totalItems: getTotalItems(),
             totalPrice: getTotalPrice(),
@@ -242,8 +252,9 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                 'Accept': 'application/json',
             },
             body: JSON.stringify({
-                // BUG: Sending corrupted zip code due to data processing issue
-                zip_code: corruptedZipCode,
+                // BUG: Sending processed/corrupted data due to state management issue
+                zip_code: processedZipCode,
+                country: actualCountry,
             })
         })
         .then(async (response) => {
@@ -268,11 +279,15 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                         component: 'CartIndex',
                         action: 'estimateShipping',
                         errorType: 'shipping_estimation',
-                        userType: 'guest'
+                        userType: 'guest',
+                        selectedCountry: country || 'none',
+                        hasCountryBug: actualCountry !== country ? 'yes' : 'no'
                     },
                     extra: {
-                        userEnteredZipCode: corruptedZipCode, // What user actually entered (corrupted due to bug)
-                        originalParameter: zipCode, // What was originally passed (for debugging)
+                        userEnteredZipCode: processedZipCode, // What user actually entered (may be corrupted due to bug)
+                        userEnteredCountry: actualCountry, // What was sent (empty due to bug)
+                        originalZipParameter: zipCode, // What was originally passed (for debugging)
+                        originalCountryParameter: country, // What was originally passed (for debugging)
                         guestUserId: guestUserId,
                         totalItems: getTotalItems(),
                         totalPrice: getTotalPrice(),
@@ -507,36 +522,72 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                                             
                                             {/* Shipping Estimation Section */}
                                             <div className="border-t pt-4">
-                                                <div className="space-y-2">
+                                                <div className="space-y-3">
                                                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                                                         Estimate Shipping
                                                     </label>
-                                                    <div className="flex space-x-2">
-                                                        <Input
-                                                            type="text"
-                                                            placeholder="Enter ZIP code"
-                                                            className="flex-1"
-                                                            id="zip-code"
-                                                            maxLength={10}
-                                                            onChange={() => setShippingError(null)}
-                                                        />
-                                                        <Button
-                                                            type="button"
-                                                            variant="outline"
-                                                            size="sm"
-                                                            disabled={shippingProcessing}
-                                                            onClick={() => {
-                                                                const zipCode = (document.getElementById('zip-code') as HTMLInputElement)?.value;
-                                                                if (zipCode) {
-                                                                    handleEstimateShipping(zipCode);
-                                                                }
+                                                    
+                                                    {/* Country Selection */}
+                                                    <div className="space-y-1">
+                                                        <label className="text-xs text-gray-600 dark:text-gray-400">
+                                                            Country
+                                                        </label>
+                                                        <Select 
+                                                            value={selectedCountry} 
+                                                            onValueChange={(value) => {
+                                                                setSelectedCountry(value);
+                                                                setShippingError(null);
                                                             }}
                                                         >
-                                                            Estimate
-                                                        </Button>
+                                                            <SelectTrigger className="w-full">
+                                                                <SelectValue placeholder="Select a country" />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="United States">United States</SelectItem>
+                                                                <SelectItem value="Canada">Canada</SelectItem>
+                                                                <SelectItem value="United Kingdom">United Kingdom</SelectItem>
+                                                                <SelectItem value="Germany">Germany</SelectItem>
+                                                                <SelectItem value="France">France</SelectItem>
+                                                                <SelectItem value="Australia">Australia</SelectItem>
+                                                                <SelectItem value="Japan">Japan</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    
+                                                    {/* ZIP Code and Estimate Button */}
+                                                    <div className="flex space-x-2">
+                                                        <div className="flex-1">
+                                                            <label className="text-xs text-gray-600 dark:text-gray-400">
+                                                                ZIP/Postal Code
+                                                            </label>
+                                                            <Input
+                                                                type="text"
+                                                                placeholder="Enter ZIP code"
+                                                                className="mt-1"
+                                                                id="zip-code"
+                                                                maxLength={10}
+                                                                onChange={() => setShippingError(null)}
+                                                            />
+                                                        </div>
+                                                        <div className="flex items-end">
+                                                            <Button
+                                                                type="button"
+                                                                variant="outline"
+                                                                size="sm"
+                                                                disabled={shippingProcessing}
+                                                                onClick={() => {
+                                                                    const zipCode = (document.getElementById('zip-code') as HTMLInputElement)?.value;
+                                                                    if (zipCode) {
+                                                                        handleEstimateShipping(zipCode, selectedCountry);
+                                                                    }
+                                                                }}
+                                                            >
+                                                                Estimate
+                                                            </Button>
+                                                        </div>
                                                     </div>
                                                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                                                        Test Sentry error tracking by entering any ZIP code
+                                                        Test Sentry error tracking by selecting any country and entering a ZIP code
                                                     </p>
                                                     
                                                     {/* Shipping Error Alert */}
