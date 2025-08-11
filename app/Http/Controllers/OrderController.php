@@ -216,6 +216,97 @@ class OrderController extends Controller
         ], 400);
     }
 
+    public function estimateShipping(Request $request)
+    {
+        // Log the incoming request with cart info and zip code value if present
+        $cart = session()->get('cart', []);
+        $zipCodeValue = $request->input('zip_code', null);
+        $zipCodeForLog = $zipCodeValue !== null && $zipCodeValue !== '' ? $zipCodeValue : 'null';
+        Log::info('Shipping estimation request received', [
+            'zip_code_custom' => $zipCodeForLog,
+            'test_field_shipping123' => 'should_appear_in_sentry',
+            'debug_info' => 'shipping_debug',
+            'user_id' => 'guest',
+            'cart' => $cart,
+        ]);
+
+        $zipCode = $request->input('zip_code');
+        $userId = 'guest';
+
+        // Check if zip code is empty
+        if (empty(trim($zipCode))) {
+            Log::warning('Empty zip code received', [
+                'received_value' => $zipCode,
+                'received_length' => strlen($zipCode),
+                'user_id' => $userId,
+                'user_type' => 'guest',
+                'cart_context' => [
+                    'items_count' => count($cart),
+                    'total_items' => array_sum(array_column($cart, 'quantity')),
+                    'total_value' => array_sum(array_map(function($item) {
+                        return $item['product']['price'] * $item['quantity'];
+                    }, $cart)),
+                ],
+                'session_id' => session()->getId(),
+            ]);
+            
+            return response()->json([
+                'error' => 'Please enter a valid ZIP code',
+                'message' => 'ZIP code cannot be empty'
+            ], 400);
+        }
+
+        // Validate the zip code format (only for non-empty codes)
+        $validated = $request->validate([
+            'zip_code' => 'required|string|max:10',
+        ]);
+
+        Log::info('Processing zip code for shipping estimation', [
+            'zip_code' => $validated['zip_code'],
+            'zip_code_length' => strlen($validated['zip_code']),
+            'user_id' => $userId,
+            'cart_count' => count($cart),
+            'test_field_shipping123' => 'should_appear_in_sentry'
+        ]);
+
+        $zipCode = $validated['zip_code'];
+
+        // This method is designed to throw an exception for Sentry testing
+        // Any zip code will trigger a believable shipping error
+        Log::error('Shipping estimation failed - zip code not serviceable', [
+            'zip_code' => $zipCode,
+            'user_id' => $userId,
+            'user_type' => 'guest',
+            'cart_context' => [
+                'items_count' => count($cart),
+                'total_items' => array_sum(array_column($cart, 'quantity')),
+                'total_value' => array_sum(array_map(function($item) {
+                    return $item['product']['price'] * $item['quantity'];
+                }, $cart)),
+            ],
+            'session_id' => session()->getId(),
+            'shipping_service' => 'test_shipping_api',
+            'error_type' => 'zip_code_not_found'
+        ]);
+
+        // Generate believable shipping error messages based on zip code patterns
+        $errorMessage = 'Sorry, we do not currently ship to ZIP code ' . $zipCode;
+        
+        // Add some variety to the error messages to make them more realistic
+        if (preg_match('/^9/', $zipCode)) {
+            $errorMessage = 'Shipping to ZIP code ' . $zipCode . ' is temporarily unavailable due to carrier restrictions';
+        } elseif (preg_match('/^0/', $zipCode)) {
+            $errorMessage = 'ZIP code ' . $zipCode . ' could not be verified with our shipping provider';
+        } elseif (strlen($zipCode) < 5) {
+            $errorMessage = 'Please enter a valid 5-digit ZIP code';
+        }
+
+        return response()->json([
+            'error' => $errorMessage,
+            'message' => 'Unable to estimate shipping costs for the provided ZIP code'
+        ], 400);
+    }
+
     public function checkout(Request $request)
     {
         $validated = $request->validate([

@@ -39,6 +39,8 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
     const { delete: destroy, processing } = useForm();
     const [couponError, setCouponError] = useState<string | null>(null);
     const [couponProcessing, setCouponProcessing] = useState(false);
+    const [shippingError, setShippingError] = useState<string | null>(null);
+    const [shippingProcessing, setShippingProcessing] = useState(false);
     const [quantities, setQuantities] = useState<{ [key: number]: number }>({});
 
     // Ensure cartItems is always an object
@@ -54,6 +56,9 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
     useEffect(() => {
         if (errors?.error) {
             setCouponError(errors.error);
+        }
+        if (errors?.shipping_error) {
+            setShippingError(errors.shipping_error);
         }
     }, [errors]);
 
@@ -193,6 +198,115 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
         .finally(() => {
             console.debug(`🏁 Coupon processing finished for user: ${guestUserId}`, { guestUserId });
             setCouponProcessing(false);
+        });
+    };
+
+    const handleEstimateShipping = (zipCode: string) => {
+        console.info(`📦 handleEstimateShipping called with zip code: ${zipCode}`, { zipCode });
+        setShippingError(null); // Clear any previous errors
+        setShippingProcessing(true);
+        
+        const guestUserId = getGuestUserId();
+        console.debug(`👤 Guest user ID for shipping: ${guestUserId}`, { guestUserId });
+        
+        // Log cart information for context
+        console.debug(`🛍️ Shipping estimation for cart: ${getTotalItems()} items, $${getTotalPrice().toFixed(2)} total`, {
+            cartItems: JSON.stringify(safeCartItems),
+            totalItems: getTotalItems(),
+            totalPrice: getTotalPrice(),
+            itemCount: Object.keys(safeCartItems).length
+        });
+        
+        // Simulate a realistic bug where the zip code gets corrupted during processing
+        // This could happen due to validation issues, encoding problems, or data transformation
+        
+        // BUG: The zipCode parameter is getting corrupted before reaching this point
+        // This simulates a data corruption issue where zip codes are not properly handled
+        const corruptedZipCode = zipCode.replace(/\d/g, 'X'); // Replace digits with X to simulate corruption
+        
+        // Log the shipping estimation attempt with appropriate log level
+        console.warn(`📦 Estimating Shipping for Zip Code: ${corruptedZipCode}`, {
+            userEnteredZip: corruptedZipCode, // This will be corrupted due to the bug
+            originalParameter: zipCode, // What was originally passed (for debugging)
+            guestUserId: guestUserId,
+            totalItems: getTotalItems(),
+            totalPrice: getTotalPrice(),
+            itemCount: Object.keys(safeCartItems).length
+        });
+        
+        fetch(route('cart.estimate-shipping'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify({
+                // BUG: Sending corrupted zip code due to data processing issue
+                zip_code: corruptedZipCode,
+            })
+        })
+        .then(async (response) => {
+            console.debug(`📡 Shipping response received: ${response.status} ${response.statusText}`, { 
+                status: response.status, 
+                statusText: response.statusText 
+            });
+            
+            if (!response.ok) {
+                const data = await response.json();
+                console.error(`❌ Shipping error response: ${data.error || 'Unknown shipping error'}`, {
+                    error: data.error || 'Unknown shipping error',
+                    message: data.message || '',
+                    status: response.status,
+                    statusText: response.statusText
+                });
+                
+                // Capture the shipping error in Sentry frontend
+                Sentry.captureException(new Error(data.error || 'Shipping estimation failed'), {
+                    tags: {
+                        location: 'frontend',
+                        component: 'CartIndex',
+                        action: 'estimateShipping',
+                        errorType: 'shipping_estimation',
+                        userType: 'guest'
+                    },
+                    extra: {
+                        userEnteredZipCode: corruptedZipCode, // What user actually entered (corrupted due to bug)
+                        originalParameter: zipCode, // What was originally passed (for debugging)
+                        guestUserId: guestUserId,
+                        totalItems: getTotalItems(),
+                        totalPrice: getTotalPrice(),
+                        itemCount: Object.keys(safeCartItems).length,
+                        responseStatus: response.status,
+                        responseData: JSON.stringify(data),
+                        userAgent: navigator.userAgent,
+                        timestamp: new Date().toISOString()
+                    },
+                    level: 'error'
+                });
+                
+                console.warn(`🚨 Sentry error captured for shipping estimation failure: ${data.error || 'Unknown shipping error'}`);
+                throw new Error(data.error || 'Shipping estimation failed');
+            }
+            
+            const data = await response.json();
+            console.warn(`✅ Unexpected shipping success response: ${JSON.stringify(data)}`, {
+                responseData: JSON.stringify(data)
+            });
+            // This shouldn't happen since we always return an error
+            setShippingError('Unexpected success response');
+        })
+        .catch((error) => {
+            console.error(`💥 Caught shipping error: ${error.message}`, { 
+                errorMessage: error.message,
+                errorName: error.name,
+                errorStack: error.stack
+            });
+            setShippingError(error instanceof Error ? error.message : 'Shipping estimation failed');
+        })
+        .finally(() => {
+            console.debug(`🏁 Shipping estimation finished for user: ${guestUserId}`, { guestUserId });
+            setShippingProcessing(false);
         });
     };
 
@@ -385,6 +499,53 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                                                             <AlertTitle>Coupon Error</AlertTitle>
                                                             <AlertDescription>
                                                                 {couponError}
+                                                            </AlertDescription>
+                                                        </Alert>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Shipping Estimation Section */}
+                                            <div className="border-t pt-4">
+                                                <div className="space-y-2">
+                                                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                        Estimate Shipping
+                                                    </label>
+                                                    <div className="flex space-x-2">
+                                                        <Input
+                                                            type="text"
+                                                            placeholder="Enter ZIP code"
+                                                            className="flex-1"
+                                                            id="zip-code"
+                                                            maxLength={10}
+                                                            onChange={() => setShippingError(null)}
+                                                        />
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="sm"
+                                                            disabled={shippingProcessing}
+                                                            onClick={() => {
+                                                                const zipCode = (document.getElementById('zip-code') as HTMLInputElement)?.value;
+                                                                if (zipCode) {
+                                                                    handleEstimateShipping(zipCode);
+                                                                }
+                                                            }}
+                                                        >
+                                                            Estimate
+                                                        </Button>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                                                        Test Sentry error tracking by entering any ZIP code
+                                                    </p>
+                                                    
+                                                    {/* Shipping Error Alert */}
+                                                    {shippingError && (
+                                                        <Alert variant="destructive">
+                                                            <AlertCircleIcon />
+                                                            <AlertTitle>Shipping Error</AlertTitle>
+                                                            <AlertDescription>
+                                                                {shippingError}
                                                             </AlertDescription>
                                                         </Alert>
                                                     )}
