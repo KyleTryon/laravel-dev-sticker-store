@@ -194,8 +194,7 @@ class OrderController extends Controller
 
         $couponCode = $validated['coupon_code'];
 
-        // This method is designed to throw an exception for Sentry testing
-        // Any non-empty coupon code will trigger an exception
+
         Log::error('Coupon validation failed', [
             'coupon_code' => $couponCode,
             'user_id' => $userId,
@@ -214,6 +213,202 @@ class OrderController extends Controller
             'error' => 'Invalid coupon code',
             'message' => 'The coupon code "' . $couponCode . '" is not valid'
         ], 400);
+    }
+
+    public function estimateShipping(Request $request)
+    {
+        // Log the incoming request with cart info and both zip code and country values if present
+        $cart = session()->get('cart', []);
+        $zipCodeValue = $request->input('zip_code', null);
+        $countryValue = $request->input('country', null);
+        $zipCodeForLog = $zipCodeValue !== null && $zipCodeValue !== '' ? $zipCodeValue : 'null';
+        $countryForLog = $countryValue !== null && $countryValue !== '' ? $countryValue : 'null';
+        Log::info('Shipping estimation request received', [
+            'zip_code_custom' => $zipCodeForLog,
+            'country_custom' => $countryForLog,
+            'test_field_shipping123' => 'should_appear_in_sentry',
+            'debug_info' => 'shipping_debug',
+            'user_id' => 'guest',
+            'cart' => $cart,
+        ]);
+
+        $zipCode = $request->input('zip_code');
+        $country = $request->input('country', '');
+        $userId = 'guest';
+
+        // Check if zip code is empty
+        if (empty(trim($zipCode))) {
+            Log::warning('Empty zip code received', [
+                'received_value' => $zipCode,
+                'received_length' => strlen($zipCode),
+                'country' => $country,
+                'user_id' => $userId,
+                'user_type' => 'guest',
+                'cart_context' => [
+                    'items_count' => count($cart),
+                    'total_items' => array_sum(array_column($cart, 'quantity')),
+                    'total_value' => array_sum(array_map(function($item) {
+                        return $item['product']['price'] * $item['quantity'];
+                    }, $cart)),
+                ],
+                'session_id' => session()->getId(),
+            ]);
+            
+            return response()->json([
+                'error' => 'Please enter a valid ZIP code',
+                'message' => 'ZIP code cannot be empty'
+            ], 400);
+        }
+
+        // Validate the zip code and country format
+        $validated = $request->validate([
+            'zip_code' => 'required|string|max:10',
+            'country' => 'nullable|string|max:50',
+        ]);
+
+        Log::info('Processing zip code and country for shipping estimation', [
+            'zip_code' => $validated['zip_code'],
+            'zip_code_length' => strlen($validated['zip_code']),
+            'country' => $validated['country'] ?? 'none',
+            'user_id' => $userId,
+            'cart_count' => count($cart),
+            'test_field_shipping123' => 'should_appear_in_sentry'
+        ]);
+
+        $zipCode = $validated['zip_code'];
+        $country = $validated['country'] ?? '';
+
+
+        if (empty($country)) {
+            Log::error('Shipping estimation failed - missing country', [
+                'zip_code' => $zipCode,
+                'country' => $country,
+                'user_id' => $userId,
+                'user_type' => 'guest',
+                'cart_context' => [
+                    'items_count' => count($cart),
+                    'total_items' => array_sum(array_column($cart, 'quantity')),
+                    'total_value' => array_sum(array_map(function($item) {
+                        return $item['product']['price'] * $item['quantity'];
+                    }, $cart)),
+                ],
+                'session_id' => session()->getId(),
+                'shipping_service' => 'test_shipping_api',
+                'error_type' => 'missing_country'
+            ]);
+            
+            return response()->json([
+                'error' => 'Please select a country to estimate shipping costs',
+                'message' => 'Country selection is required for shipping estimation'
+            ], 400);
+        }
+
+        if ($country !== 'United States') {
+            Log::error('Shipping estimation failed - non-US country', [
+                'zip_code' => $zipCode,
+                'country' => $country,
+                'user_id' => $userId,
+                'user_type' => 'guest',
+                'cart_context' => [
+                    'items_count' => count($cart),
+                    'total_items' => array_sum(array_column($cart, 'quantity')),
+                    'total_value' => array_sum(array_map(function($item) {
+                        return $item['product']['price'] * $item['quantity'];
+                    }, $cart)),
+                ],
+                'session_id' => session()->getId(),
+                'shipping_service' => 'test_shipping_api',
+                'error_type' => 'international_shipping_not_supported'
+            ]);
+            
+            return response()->json([
+                'error' => 'International shipping to ' . $country . ' is not currently supported',
+                'message' => 'We only ship to the United States at this time'
+            ], 400);
+        }
+
+        if (preg_match('/[X]/', $zipCode)) {
+            Log::error('Shipping estimation failed - corrupted ZIP code', [
+                'zip_code' => $zipCode,
+                'country' => $country,
+                'user_id' => $userId,
+                'user_type' => 'guest',
+                'cart_context' => [
+                    'items_count' => count($cart),
+                    'total_items' => array_sum(array_column($cart, 'quantity')),
+                    'total_value' => array_sum(array_map(function($item) {
+                        return $item['product']['price'] * $item['quantity'];
+                    }, $cart)),
+                ],
+                'session_id' => session()->getId(),
+                'shipping_service' => 'test_shipping_api',
+                'error_type' => 'invalid_zip_code_format'
+            ]);
+            
+            return response()->json([
+                'error' => 'Invalid ZIP code format detected. Please enter only numbers',
+                'message' => 'ZIP code contains invalid characters'
+            ], 400);
+        }
+
+        if (strlen($zipCode) < 5) {
+            Log::warning('Shipping estimation failed - invalid ZIP code length', [
+                'zip_code' => $zipCode,
+                'zip_length' => strlen($zipCode),
+                'country' => $country,
+                'user_id' => $userId,
+            ]);
+            
+            return response()->json([
+                'error' => 'Please enter a valid 5-digit ZIP code',
+                'message' => 'ZIP code must be at least 5 digits'
+            ], 400);
+        }
+
+
+        Log::info('Shipping estimation successful', [
+            'zip_code' => $zipCode,
+            'country' => $country,
+            'user_id' => $userId,
+            'user_type' => 'guest',
+            'cart_context' => [
+                'items_count' => count($cart),
+                'total_items' => array_sum(array_column($cart, 'quantity')),
+                'total_value' => array_sum(array_map(function($item) {
+                    return $item['product']['price'] * $item['quantity'];
+                }, $cart)),
+            ],
+            'session_id' => session()->getId(),
+            'shipping_service' => 'test_shipping_api',
+        ]);
+
+        $standardShipping = 5.99;
+        $expeditedShipping = 12.99;
+        
+        if (preg_match('/^(9|8)/', $zipCode)) {
+            $standardShipping = 7.99;
+            $expeditedShipping = 15.99;
+        } elseif (preg_match('/^(0|1)/', $zipCode)) {
+            $standardShipping = 4.99;
+            $expeditedShipping = 10.99;
+        }
+
+        return response()->json([
+            'success' => true,
+            'shipping_options' => [
+                [
+                    'name' => 'Standard Shipping',
+                    'cost' => $standardShipping,
+                    'estimated_days' => '5-7 business days'
+                ],
+                [
+                    'name' => 'Expedited Shipping', 
+                    'cost' => $expeditedShipping,
+                    'estimated_days' => '2-3 business days'
+                ]
+            ],
+            'message' => 'Shipping estimates calculated for ZIP code ' . $zipCode
+        ], 200);
     }
 
     public function checkout(Request $request)

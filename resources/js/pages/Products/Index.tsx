@@ -22,6 +22,8 @@ export default function ProductsIndex({ products, cart, cartCount: initialCartCo
     const [productsInCart, setProductsInCart] = useState<{ [key: number]: boolean }>({});
     // State for cart count badge
     const [cartCount, setCartCount] = useState<number>(initialCartCount || 0);
+    // State to track which products are currently being added to cart (prevents rage clicking)
+    const [addingToCart, setAddingToCart] = useState<{ [key: number]: boolean }>({});
 
     // Initialize state from cart prop on mount
     useEffect(() => {
@@ -39,17 +41,30 @@ export default function ProductsIndex({ products, cart, cartCount: initialCartCo
     }, [cart]);
 
     const addToCart = (productId: number) => {
+        // Prevent multiple concurrent requests for the same product
+        if (addingToCart[productId]) {
+            console.log(`[Cart] Already adding product ${productId} to cart, ignoring duplicate request`);
+            return;
+        }
+
         const quantity = quantities[productId] || 1;
         const data = {
             product_id: productId,
             quantity: quantity,
         };
+        
         console.log(`[Cart] Adding to cart: Product ID ${productId}, Quantity ${quantity}`);
+        setAddingToCart(prev => ({ ...prev, [productId]: true }));
+        
         router.post(route('cart.add'), data, {
             onSuccess: () => {
                 setProductsInCart(prev => ({ ...prev, [productId]: true }));
                 setQuantities(prev => ({ ...prev, [productId]: quantity }));
                 setCartCount(prev => prev + quantity);
+                setAddingToCart(prev => ({ ...prev, [productId]: false }));
+            },
+            onError: () => {
+                setAddingToCart(prev => ({ ...prev, [productId]: false }));
             }
         });
     };
@@ -239,12 +254,12 @@ export default function ProductsIndex({ products, cart, cartCount: initialCartCo
                                         ) : (
                                             <Button 
                                                 onClick={() => addToCart(product.id)}
-                                                disabled={product.stock_quantity === 0 || processing}
+                                                disabled={product.stock_quantity === 0 || processing || addingToCart[product.id]}
                                                 className="w-full"
                                                 size="sm"
                                             >
                                                 <ShoppingCart className="h-4 w-4 mr-2" />
-                                                {processing ? 'Adding...' : 'Add to Cart'}
+                                                {addingToCart[product.id] ? 'Adding...' : processing ? 'Adding...' : 'Add to Cart'}
                                             </Button>
                                         )}
                                     </CardFooter>

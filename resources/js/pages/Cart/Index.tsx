@@ -2,6 +2,7 @@ import { Head, Link, useForm, router } from '@inertiajs/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertCircleIcon } from 'lucide-react';
 import { Minus, Plus, Trash2 } from 'lucide-react';
@@ -39,6 +40,10 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
     const { delete: destroy, processing } = useForm();
     const [couponError, setCouponError] = useState<string | null>(null);
     const [couponProcessing, setCouponProcessing] = useState(false);
+    const [shippingError, setShippingError] = useState<string | null>(null);
+    const [shippingProcessing, setShippingProcessing] = useState(false);
+    const [shippingSuccess, setShippingSuccess] = useState<string | null>(null);
+    const [selectedCountry, setSelectedCountry] = useState<string>('');
     const [quantities, setQuantities] = useState<{ [key: number]: number }>({});
 
     // Ensure cartItems is always an object
@@ -54,6 +59,9 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
     useEffect(() => {
         if (errors?.error) {
             setCouponError(errors.error);
+        }
+        if (errors?.shipping_error) {
+            setShippingError(errors.shipping_error);
         }
     }, [errors]);
 
@@ -102,17 +110,11 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             itemCount: Object.keys(safeCartItems).length
         });
         
-        // Simulate a realistic bug where the coupon code gets lost during form processing
-        // This could happen due to state management issues, form reset, or timing problems
+        const actualCouponCode = couponCode;
         
-        // BUG: The couponCode parameter is getting lost/cleared before reaching this point
-        // This simulates a state management issue where the value is not properly passed
-        const actualCouponCode = ''; // Simulating the bug where coupon code is lost
-        
-        // Log the coupon application attempt with appropriate log level
         console.warn(`🛒 Applying Coupon Code: ${actualCouponCode}`, {
-            userEnteredCode: actualCouponCode, // This will be empty due to the bug
-            originalParameter: couponCode, // What was originally passed (for debugging)
+            userEnteredCode: actualCouponCode,
+            originalParameter: couponCode,
             guestUserId: guestUserId,
             totalItems: getTotalItems(),
             totalPrice: getTotalPrice(),
@@ -127,7 +129,6 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                 'Accept': 'application/json',
             },
             body: JSON.stringify({
-                // BUG: Sending empty string due to state management issue
                 coupon_code: actualCouponCode,
             })
         })
@@ -146,7 +147,6 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                     statusText: response.statusText
                 });
                 
-                // Capture the error in Sentry frontend
                 Sentry.captureException(new Error(data.error || 'Invalid coupon code'), {
                     tags: {
                         location: 'frontend',
@@ -156,8 +156,8 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                         userType: 'guest'
                     },
                     extra: {
-                        userEnteredCouponCode: actualCouponCode, // What user actually entered (empty due to bug)
-                        originalParameter: couponCode, // What was originally passed (for debugging)
+                        userEnteredCouponCode: actualCouponCode,
+                        originalParameter: couponCode,
                         guestUserId: guestUserId,
                         totalItems: getTotalItems(),
                         totalPrice: getTotalPrice(),
@@ -170,8 +170,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                     level: 'error'
                 });
                 
-
-                console.warn(`🚨 Sentry error captured for coupon validation failure: ${data.error || 'Unknown error'}`);
+                
                 throw new Error(data.error || 'Invalid coupon code');
             }
             
@@ -179,7 +178,6 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             console.warn(`✅ Unexpected success response: ${JSON.stringify(data)}`, {
                 responseData: JSON.stringify(data)
             });
-            // This shouldn't happen since we always return an error
             setCouponError('Unexpected success response');
         })
         .catch((error) => {
@@ -193,6 +191,139 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
         .finally(() => {
             console.debug(`🏁 Coupon processing finished for user: ${guestUserId}`, { guestUserId });
             setCouponProcessing(false);
+        });
+    };
+
+    const handleEstimateShipping = (zipCode: string, country: string) => {
+        console.info(`📦 handleEstimateShipping called with zip code: ${zipCode}, country: ${country}`, { zipCode, country });
+        setShippingError(null); // Clear any previous errors
+        setShippingSuccess(null); // Clear any previous success messages
+        setShippingProcessing(true);
+        
+        const guestUserId = getGuestUserId();
+        console.debug(`👤 Guest user ID for shipping: ${guestUserId}`, { guestUserId });
+        
+        // Log cart information for context
+        console.debug(`🛍️ Shipping estimation for cart: ${getTotalItems()} items, $${getTotalPrice().toFixed(2)} total`, {
+            cartItems: JSON.stringify(safeCartItems),
+            totalItems: getTotalItems(),
+            totalPrice: getTotalPrice(),
+            itemCount: Object.keys(safeCartItems).length
+        });
+        
+        const actualCountry = country;
+        
+        let processedZipCode = zipCode;
+        if (country !== 'United States' && country !== '') {
+            processedZipCode = zipCode
+                .replace(/[^\w\s]/g, '')
+                .replace(/\s+/g, '')
+                .substring(0, 5);
+            
+            if (processedZipCode.length < 3) {
+                processedZipCode = '';
+            }
+        }
+        
+        console.warn(`📦 Estimating Shipping for Zip Code: ${processedZipCode}, Country: ${actualCountry}`, {
+            userEnteredZip: processedZipCode,
+            userEnteredCountry: actualCountry,
+            originalZipParameter: zipCode,
+            originalCountryParameter: country,
+            guestUserId: guestUserId,
+            totalItems: getTotalItems(),
+            totalPrice: getTotalPrice(),
+            itemCount: Object.keys(safeCartItems).length
+        });
+        
+        fetch(route('cart.estimate-shipping'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify({
+                zip_code: processedZipCode,
+                country: actualCountry,
+            })
+        })
+        .then(async (response) => {
+            console.debug(`📡 Shipping response received: ${response.status} ${response.statusText}`, { 
+                status: response.status, 
+                statusText: response.statusText 
+            });
+            
+            const data = await response.json();
+            
+            if (!response.ok) {
+                console.error(`❌ Shipping error response: ${data.error || 'Unknown shipping error'}`, {
+                    error: data.error || 'Unknown shipping error',
+                    message: data.message || '',
+                    status: response.status,
+                    statusText: response.statusText
+                });
+                
+                Sentry.captureException(new Error(data.error || 'Shipping estimation failed'), {
+                    tags: {
+                        location: 'frontend',
+                        component: 'CartIndex',
+                        action: 'estimateShipping',
+                        errorType: 'shipping_estimation',
+                        userType: 'guest',
+                        selectedCountry: country || 'none',
+                        hasCountryBug: actualCountry !== country ? 'yes' : 'no'
+                    },
+                    extra: {
+                        userEnteredZipCode: processedZipCode,
+                        userEnteredCountry: actualCountry,
+                        originalZipParameter: zipCode,
+                        originalCountryParameter: country,
+                        guestUserId: guestUserId,
+                        totalItems: getTotalItems(),
+                        totalPrice: getTotalPrice(),
+                        itemCount: Object.keys(safeCartItems).length,
+                        responseStatus: response.status,
+                        responseData: JSON.stringify(data),
+                        userAgent: navigator.userAgent,
+                        timestamp: new Date().toISOString()
+                    },
+                    level: 'error'
+                });
+                
+                throw new Error(data.error || 'Shipping estimation failed');
+            }
+            
+            console.info(`✅ Shipping estimation successful: ${JSON.stringify(data)}`, {
+                responseData: JSON.stringify(data),
+                zipCode: zipCode,
+                country: country,
+                shippingOptions: data.shipping_options?.length || 0
+            });
+            
+            setShippingError(null);
+            const optionsText = data.shipping_options?.map((option: any) => 
+                `${option.name}: $${option.cost} (${option.estimated_days})`
+            ).join(', ') || 'No options available';
+            
+            setShippingSuccess(`Shipping estimated successfully! Options: ${optionsText}`);
+            
+            console.info(`📦 Available shipping options for ${zipCode}:`, {
+                options: data.shipping_options,
+                message: data.message
+            });
+        })
+        .catch((error) => {
+            console.error(`💥 Caught shipping error: ${error.message}`, { 
+                errorMessage: error.message,
+                errorName: error.name,
+                errorStack: error.stack
+            });
+            setShippingError(error instanceof Error ? error.message : 'Shipping estimation failed');
+        })
+        .finally(() => {
+            console.debug(`🏁 Shipping estimation finished for user: ${guestUserId}`, { guestUserId });
+            setShippingProcessing(false);
         });
     };
 
@@ -375,7 +506,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                                                         </Button>
                                                     </div>
                                                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                                                        Test Sentry error tracking by entering any coupon code
+                                                        Enter a coupon code to apply discount
                                                     </p>
                                                     
                                                     {/* Error Alert */}
@@ -385,6 +516,103 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                                                             <AlertTitle>Coupon Error</AlertTitle>
                                                             <AlertDescription>
                                                                 {couponError}
+                                                            </AlertDescription>
+                                                        </Alert>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Shipping Estimation Section */}
+                                            <div className="border-t pt-4">
+                                                <div className="space-y-3">
+                                                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                        Estimate Shipping
+                                                    </label>
+                                                    
+                                                    {/* Country Selection */}
+                                                    <div className="space-y-1">
+                                                        <label className="text-xs text-gray-600 dark:text-gray-400">
+                                                            Country
+                                                        </label>
+                                                        <Select 
+                                                            value={selectedCountry} 
+                                                            onValueChange={(value) => {
+                                                                setSelectedCountry(value);
+                                                                setShippingError(null);
+                                                                setShippingSuccess(null);
+                                                            }}
+                                                        >
+                                                            <SelectTrigger className="w-full">
+                                                                <SelectValue placeholder="Select a country" />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="United States">United States</SelectItem>
+                                                                <SelectItem value="Canada">Canada</SelectItem>
+                                                                <SelectItem value="United Kingdom">United Kingdom</SelectItem>
+                                                                <SelectItem value="Germany">Germany</SelectItem>
+                                                                <SelectItem value="France">France</SelectItem>
+                                                                <SelectItem value="Australia">Australia</SelectItem>
+                                                                <SelectItem value="Japan">Japan</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    
+                                                    {/* ZIP Code and Estimate Button */}
+                                                    <div className="flex space-x-2">
+                                                        <div className="flex-1">
+                                                            <label className="text-xs text-gray-600 dark:text-gray-400">
+                                                                ZIP/Postal Code
+                                                            </label>
+                                                            <Input
+                                                                type="text"
+                                                                placeholder="Enter ZIP code"
+                                                                className="mt-1"
+                                                                id="zip-code"
+                                                                maxLength={10}
+                                                                onChange={() => {
+                                                                    setShippingError(null);
+                                                                    setShippingSuccess(null);
+                                                                }}
+                                                            />
+                                                        </div>
+                                                        <div className="flex items-end">
+                                                            <Button
+                                                                type="button"
+                                                                variant="outline"
+                                                                size="sm"
+                                                                disabled={shippingProcessing}
+                                                                onClick={() => {
+                                                                    const zipCode = (document.getElementById('zip-code') as HTMLInputElement)?.value;
+                                                                    if (zipCode) {
+                                                                        handleEstimateShipping(zipCode, selectedCountry);
+                                                                    }
+                                                                }}
+                                                            >
+                                                                Estimate
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                                                        Get shipping estimates for your location
+                                                    </p>
+                                                    
+                                                    {/* Shipping Error Alert */}
+                                                    {shippingError && (
+                                                        <Alert variant="destructive">
+                                                            <AlertCircleIcon />
+                                                            <AlertTitle>Shipping Error</AlertTitle>
+                                                            <AlertDescription>
+                                                                {shippingError}
+                                                            </AlertDescription>
+                                                        </Alert>
+                                                    )}
+
+                                                    {/* Shipping Success Alert */}
+                                                    {shippingSuccess && (
+                                                        <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+                                                            <AlertTitle>Shipping Estimated</AlertTitle>
+                                                            <AlertDescription>
+                                                                {shippingSuccess}
                                                             </AlertDescription>
                                                         </Alert>
                                                     )}

@@ -3,6 +3,7 @@ import { Head, Link, usePage } from '@inertiajs/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { useState } from 'react';
 
 interface Product {
     id: number;
@@ -21,8 +22,17 @@ interface Props {
 
 export default function Welcome({ products }: Props) {
     const { auth } = usePage<SharedData>().props;
+    // State to track which products are currently being added to cart (prevents rage clicking)
+    const [addingToCart, setAddingToCart] = useState<{ [key: number]: boolean }>({});
 
     const addToCart = async (productId: number) => {
+        // Prevent multiple concurrent requests for the same product
+        if (addingToCart[productId]) {
+            console.log(`[Cart] Already adding product ${productId} to cart, ignoring duplicate request`);
+            return;
+        }
+
+        setAddingToCart(prev => ({ ...prev, [productId]: true }));
         try {
             const response = await fetch('/cart/add', {
                 method: 'POST',
@@ -49,6 +59,9 @@ export default function Welcome({ products }: Props) {
                 errorStack: error instanceof Error ? error.stack : undefined
             });
             alert('Error adding to cart');
+        } finally {
+            // Clear the adding state regardless of success or failure
+            setAddingToCart(prev => ({ ...prev, [productId]: false }));
         }
     };
 
@@ -151,9 +164,9 @@ export default function Welcome({ products }: Props) {
                                     <Button 
                                         onClick={() => addToCart(product.id)}
                                         className="w-full"
-                                        disabled={product.stock_quantity === 0}
+                                        disabled={product.stock_quantity === 0 || addingToCart[product.id]}
                                     >
-                                        {product.stock_quantity === 0 ? 'Out of Stock' : 'Add to Cart'}
+                                        {product.stock_quantity === 0 ? 'Out of Stock' : addingToCart[product.id] ? 'Adding...' : 'Add to Cart'}
                                     </Button>
                                 </CardFooter>
                             </Card>
