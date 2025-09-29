@@ -45,13 +45,48 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
     const [shippingSuccess, setShippingSuccess] = useState<string | null>(null);
     const [selectedCountry, setSelectedCountry] = useState<string>('');
     const [quantities, setQuantities] = useState<{ [key: number]: number }>({});
+    const [shippingOptions, setShippingOptions] = useState<any[]>([]);
+    const [selectedShippingOption, setSelectedShippingOption] = useState<any>(null);
+    const [checkoutProcessing, setCheckoutProcessing] = useState(false);
+    const [checkoutSuccess, setCheckoutSuccess] = useState(false);
+    const [checkoutStep, setCheckoutStep] = useState('');
+    const [localCartItems, setLocalCartItems] = useState(cartItems || {});
 
-    // Ensure cartItems is always an object
-    const safeCartItems = cartItems || {};
+    // Ensure cartItems is always an object - use local state for real-time updates
+    const safeCartItems = localCartItems || {};
 
-    // Generate or retrieve guest user ID
-    const getGuestUserId = (): string => {
-        // For demo purposes, use a simple static guest ID
+    // Sync local state with props when cartItems change
+    useEffect(() => {
+        setLocalCartItems(cartItems || {});
+    }, [cartItems]);
+
+    // Track cart page view
+    useEffect(() => {
+        console.log('🔍 Cart useEffect starting...'); // DEBUG
+        
+        // Set user context for all Sentry events
+        const userId = getUserId();
+        console.log('🔍 Setting user:', userId); // DEBUG
+        Sentry.setUser({ id: userId });
+        
+        console.log('🔍 Creating cart_view span...'); // DEBUG
+        Sentry.startSpan({
+            name: "cart_view",
+            op: "commerce.cart.view",
+            attributes: {
+                'cart_items': getTotalItems(),
+                'cart_value': getSubtotal(),
+                'currency': 'USD'
+            }
+        }, () => {
+            console.info('🛒 Cart page viewed - span created!');
+        });
+        
+        console.log('🔍 Cart useEffect completed!'); // DEBUG
+    }, []);
+
+    // Generate or retrieve user ID
+    const getUserId = (): string => {
         return 'guest';
     };
 
@@ -94,19 +129,54 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
         destroy(route('cart.remove', { product_id: productId }));
     };
 
+    const clearCart = async () => {
+        try {
+            const response = await fetch(route('cart.clear'), {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                    'Accept': 'application/json',
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                console.log('✅ Cart cleared successfully:', data);
+                
+                // Update local state to reflect empty cart
+                setLocalCartItems({});
+                
+                // Reset shipping options and selections since cart is empty
+                setShippingOptions([]);
+                setSelectedShippingOption(null);
+                setSelectedCountry('');
+                setShippingSuccess(null);
+                setShippingError(null);
+                
+                return data;
+            } else {
+                throw new Error('Failed to clear cart');
+            }
+        } catch (error) {
+            console.error('❌ Error clearing cart:', error);
+            throw error;
+        }
+    };
+
     const handleApplyCoupon = (couponCode: string) => {
         console.info(`🛒 handleApplyCoupon called with coupon code: ${couponCode}`, { couponCode });
         setCouponError(null); // Clear any previous errors
         setCouponProcessing(true);
         
-        const guestUserId = getGuestUserId();
+        const guestUserId = getUserId();
         console.debug(`👤 Guest user ID: ${guestUserId}`, { guestUserId });
         
         // Log cart information for context
-        console.debug(`🛍️ Cart information: ${getTotalItems()} items, $${getTotalPrice().toFixed(2)} total`, {
+        console.debug(`🛍️ Cart information: ${getTotalItems()} items, $${getSubtotal().toFixed(2)} total`, {
             cartItems: JSON.stringify(safeCartItems),
             totalItems: getTotalItems(),
-            totalPrice: getTotalPrice(),
+            totalPrice: getSubtotal(),
             itemCount: Object.keys(safeCartItems).length
         });
         
@@ -117,7 +187,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             originalParameter: couponCode,
             guestUserId: guestUserId,
             totalItems: getTotalItems(),
-            totalPrice: getTotalPrice(),
+            totalPrice: getSubtotal(),
             itemCount: Object.keys(safeCartItems).length
         });
         
@@ -160,7 +230,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                         originalParameter: couponCode,
                         guestUserId: guestUserId,
                         totalItems: getTotalItems(),
-                        totalPrice: getTotalPrice(),
+                        totalPrice: getSubtotal(),
                         itemCount: Object.keys(safeCartItems).length,
                         responseStatus: response.status,
                         responseData: JSON.stringify(data),
@@ -196,20 +266,36 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
 
     const handleEstimateShipping = (zipCode: string, country: string) => {
         console.info(`📦 handleEstimateShipping called with zip code: ${zipCode}, country: ${country}`, { zipCode, country });
-        setShippingError(null); // Clear any previous errors
-        setShippingSuccess(null); // Clear any previous success messages
-        setShippingProcessing(true);
         
-        const guestUserId = getGuestUserId();
-        console.debug(`👤 Guest user ID for shipping: ${guestUserId}`, { guestUserId });
-        
-        // Log cart information for context
-        console.debug(`🛍️ Shipping estimation for cart: ${getTotalItems()} items, $${getTotalPrice().toFixed(2)} total`, {
-            cartItems: JSON.stringify(safeCartItems),
-            totalItems: getTotalItems(),
-            totalPrice: getTotalPrice(),
-            itemCount: Object.keys(safeCartItems).length
-        });
+        // Track shipping cost estimation with Sentry
+        Sentry.startSpan({
+            name: "Shipping Cost Estimation",
+            op: "commerce.shipping.estimate",
+            attributes: {
+                'shipping.country': country,
+                'shipping.zip_code': zipCode,
+                'shipping.is_us_canada': (country === 'United States' || country === 'Canada'),
+                'cart.total_items': getTotalItems(),
+                'cart.total_value': getSubtotal(),
+                'cart.unique_products': Object.keys(safeCartItems).length,
+                'user.type': 'guest',
+                'session.timestamp': new Date().toISOString(),
+            }
+        }, async () => {
+            setShippingError(null); // Clear any previous errors
+            setShippingSuccess(null); // Clear any previous success messages
+            setShippingProcessing(true);
+            
+            const guestUserId = getUserId();
+            console.debug(`👤 Guest user ID for shipping: ${guestUserId}`, { guestUserId });
+            
+            // Log cart information for context
+            console.debug(`🛍️ Shipping estimation for cart: ${getTotalItems()} items, $${getSubtotal().toFixed(2)} total`, {
+                cartItems: JSON.stringify(safeCartItems),
+                totalItems: getTotalItems(),
+                totalPrice: getSubtotal(),
+                itemCount: Object.keys(safeCartItems).length
+            });
         
         const actualCountry = country;
         
@@ -232,7 +318,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             originalCountryParameter: country,
             guestUserId: guestUserId,
             totalItems: getTotalItems(),
-            totalPrice: getTotalPrice(),
+            totalPrice: getSubtotal(),
             itemCount: Object.keys(safeCartItems).length
         });
         
@@ -281,7 +367,7 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                         originalCountryParameter: country,
                         guestUserId: guestUserId,
                         totalItems: getTotalItems(),
-                        totalPrice: getTotalPrice(),
+                        totalPrice: getSubtotal(),
                         itemCount: Object.keys(safeCartItems).length,
                         responseStatus: response.status,
                         responseData: JSON.stringify(data),
@@ -302,11 +388,16 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             });
             
             setShippingError(null);
-            const optionsText = data.shipping_options?.map((option: any) => 
-                `${option.name}: $${option.cost} (${option.estimated_days})`
-            ).join(', ') || 'No options available';
+            const options = data.shipping_options || [];
+            setShippingOptions(options);
             
-            setShippingSuccess(`Shipping estimated successfully! Options: ${optionsText}`);
+            // Automatically select the first (typically cheapest) shipping option
+            if (options.length > 0) {
+                setSelectedShippingOption(options[0]);
+                setShippingSuccess(`${options[0].name} ($${options[0].cost.toFixed(2)}) has been automatically selected. Change options below if needed.`);
+            } else {
+                setShippingSuccess(`Shipping options available! Please select your preferred shipping method below.`);
+            }
             
             console.info(`📦 Available shipping options for ${zipCode}:`, {
                 options: data.shipping_options,
@@ -325,20 +416,216 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
             console.debug(`🏁 Shipping estimation finished for user: ${guestUserId}`, { guestUserId });
             setShippingProcessing(false);
         });
-    };
-
-    const handleCheckout = () => {
-        console.log('Checking out:', {
-            cartItemsCount: cartItemsArray.length,
-            totalItems: getTotalItems(),
-            totalPrice: getTotalPrice()
         });
     };
 
-    const getTotalPrice = () => {
+    const handleCheckout = async () => {
+        if (checkoutProcessing) return;
+        
+        setCheckoutProcessing(true);
+        
+        // Checkout span
+        return Sentry.startSpan({
+            name: "checkout",
+            op: "commerce.checkout",
+            attributes: {
+                'checkout.status': 'in_progress',
+                'cart_items': getTotalItems(),
+                'cart_value': getTotalPrice(),
+                'currency': 'USD'
+            }
+        }, async (span) => {
+            try {
+                console.log('🛍️ Full checkout process initiated:', {
+                    cartItemsCount: cartItemsArray.length,
+                    totalItems: getTotalItems(),
+                    subtotal: getSubtotal(),
+                    shippingCost: selectedShippingOption?.cost || 0,
+                    totalPrice: getTotalPrice(),
+                    selectedCountry: selectedCountry,
+                    selectedShippingOption: selectedShippingOption?.name || 'none',
+                    timestamp: new Date().toISOString()
+                });
+
+                // Step 1: Checkout Validation
+                setCheckoutStep('Validating order...');
+                await Sentry.startSpan({
+                    name: "Checkout Validation",
+                    op: "commerce.checkout.validate",
+                    attributes: {
+                        'validation.cart_items': getTotalItems(),
+                        'validation.shipping_selected': !!selectedShippingOption,
+                        'validation.country_selected': !!selectedCountry,
+                        'validation.step': 'pre_payment'
+                    }
+                }, async () => {
+                    console.log('✅ Step 1: Validating checkout data...');
+                    await new Promise(resolve => setTimeout(resolve, 800)); // Simulate validation time
+                    
+                    // Simulate validation checks
+                    if (getTotalItems() === 0) throw new Error('Cart is empty');
+                    if (!selectedShippingOption) throw new Error('No shipping option selected');
+                    
+                    console.log('✅ Checkout validation passed');
+                });
+
+                // Step 2: Payment Processing
+                setCheckoutStep('Processing payment...');
+                const paymentResult = await Sentry.startSpan({
+                    name: "Payment Processing",
+                    op: "commerce.payment.process",
+                    attributes: {
+                        'payment.amount': getTotalPrice(),
+                        'payment.currency': 'USD',
+                        'payment.method': 'demo_card',
+                        'payment.provider': 'demo_stripe',
+                        'payment.shipping_amount': selectedShippingOption?.cost || 0,
+                        'payment.tax_amount': 0
+                    }
+                }, async () => {
+                    console.log('💳 Step 2: Processing payment...');
+                    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate payment processing
+                    
+                    const paymentId = `pay_demo_${Date.now()}`;
+                    
+                    // Simulate payment success/failure (95% success rate for demo)
+                    if (Math.random() < 0.95) {
+                        console.log('💳 Payment processed successfully:', paymentId);
+                        return {
+                            success: true,
+                            payment_id: paymentId,
+                            amount: getTotalPrice(),
+                            currency: 'USD'
+                        };
+                    } else {
+                        throw new Error('Payment declined - demo failure');
+                    }
+                });
+
+                // Step 3: Order Creation
+                setCheckoutStep('Creating order...');
+                const orderResult = await Sentry.startSpan({
+                    name: "Order Creation",
+                    op: "commerce.order.create",
+                    attributes: {
+                        'order.payment_id': paymentResult.payment_id,
+                        'order.total_amount': getTotalPrice(),
+                        'order.item_count': getTotalItems(),
+                        'order.shipping_method': selectedShippingOption?.name || 'none',
+                        'order.shipping_cost': selectedShippingOption?.cost || 0,
+                        'order.customer_type': 'guest'
+                    }
+                }, async () => {
+                    console.log('📋 Step 3: Creating order...');
+                    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate order creation
+                    
+                    const orderId = `order_demo_${Date.now()}`;
+                    
+                    console.log('📋 Order created successfully:', orderId);
+                    return {
+                        order_id: orderId,
+                        status: 'confirmed',
+                        payment_id: paymentResult.payment_id,
+                        total: getTotalPrice(),
+                        items: cartItemsArray.map(item => ({
+                            product_id: item.product.id,
+                            name: item.product.name,
+                            quantity: item.quantity,
+                            price: item.product.price
+                        })),
+                        shipping: {
+                            method: selectedShippingOption?.name,
+                            cost: selectedShippingOption?.cost,
+                            estimated_delivery: selectedShippingOption?.estimated_days
+                        }
+                    };
+                });
+
+                // Step 4: Post-order Processing (inventory, notifications, etc.)
+                setCheckoutStep('Finalizing order...');
+                await Sentry.startSpan({
+                    name: "Post-Order Processing",
+                    op: "commerce.order.post_process",
+                    attributes: {
+                        'order.id': orderResult.order_id,
+                        'processing.inventory_update': true,
+                        'processing.email_confirmation': true,
+                        'processing.analytics_tracking': true
+                    }
+                }, async () => {
+                    console.log('📬 Step 4: Post-order processing...');
+                    await new Promise(resolve => setTimeout(resolve, 600)); // Simulate post-processing
+                    
+                    console.log('📬 Inventory updated, confirmation email queued');
+                });
+
+                // Success!
+                console.log('🎉 Checkout completed successfully!', {
+                    orderId: orderResult.order_id,
+                    paymentId: paymentResult.payment_id,
+                    total: getTotalPrice(),
+                    timestamp: new Date().toISOString()
+                });
+
+                // Step 5: Clear the cart after successful order
+                setCheckoutStep('Clearing cart...');
+                await Sentry.startSpan({
+                    name: "Cart Clearing",
+                    op: "commerce.cart.clear",
+                    attributes: {
+                        'cart.items_before_clear': getTotalItems(),
+                        'cart.value_before_clear': getTotalPrice(),
+                        'order.id': orderResult.order_id,
+                        'clear.reason': 'successful_checkout'
+                    }
+                }, async () => {
+                    console.log('🧹 Step 5: Clearing cart after successful order...');
+                    await clearCart();
+                    console.log('✅ Cart cleared successfully');
+                });
+
+                setCheckoutSuccess(true);
+                
+                // Update span status for successful conversion
+                span.setAttributes({
+                    'checkout.status': 'completed',
+                    'order.id': orderResult.order_id
+                });
+                
+            } catch (error) {
+                console.error('❌ Checkout failed:', error);
+                
+                Sentry.captureException(error, {
+                    tags: {
+                        checkout_step: 'payment_or_validation',
+                        total_value: getTotalPrice(),
+                        cart_items: getTotalItems()
+                    },
+                    extra: {
+                        selectedCountry,
+                        selectedShipping: selectedShippingOption?.name,
+                        cartContents: cartItemsArray
+                    }
+                });
+                
+                throw error;
+            } finally {
+                setCheckoutProcessing(false);
+                setCheckoutStep('');
+            }
+        });
+    };
+
+    const getSubtotal = () => {
         return Object.values(safeCartItems).reduce((total, item) => {
             return total + (item.product.price * item.quantity);
         }, 0);
+    };
+
+    const getTotalPrice = () => {
+        const subtotal = getSubtotal();
+        const shippingCost = selectedShippingOption?.cost || 0;
+        return subtotal + shippingCost;
     };
 
     const getTotalItems = () => {
@@ -383,14 +670,32 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                         </p>
                     </div>
 
-                    {cartItemsArray.length === 0 ? (
+                    {cartItemsArray.length === 0 || checkoutSuccess ? (
                         <div className="text-center py-12">
-                            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
-                                Your cart is empty
-                            </h3>
-                            <p className="text-gray-600 dark:text-gray-300 mb-4">
-                                Add some awesome stickers to get started!
-                            </p>
+                            {checkoutSuccess ? (
+                                <>
+                                    <div className="flex justify-center mb-4">
+                                        <svg className="h-16 w-16 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+                                        Order Completed Successfully!
+                                    </h3>
+                                    <p className="text-gray-600 dark:text-gray-300 mb-4">
+                                        Your order has been processed and your cart has been cleared. Thank you for shopping with us!
+                                    </p>
+                                </>
+                            ) : (
+                                <>
+                                    <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+                                        Your cart is empty
+                                    </h3>
+                                    <p className="text-gray-600 dark:text-gray-300 mb-4">
+                                        Add some awesome stickers to get started!
+                                    </p>
+                                </>
+                            )}
                             <Link href="/">
                                 <Button>
                                     Continue Shopping
@@ -461,6 +766,25 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
 
                             {/* Order Summary */}
                             <div className="lg:col-span-1">
+                                {/* Checkout Progress Indicator */}
+                                {checkoutProcessing && (
+                                    <Card className="mb-6 border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950">
+                                        <CardContent className="p-4">
+                                            <div className="flex items-center space-x-3">
+                                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                                                <div>
+                                                    <h3 className="font-medium text-blue-900 dark:text-blue-100">
+                                                        Processing Your Order
+                                                    </h3>
+                                                    <p className="text-sm text-blue-700 dark:text-blue-200">
+                                                        {checkoutStep || 'Please wait...'}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                )}
+                                
                                 <Card>
                                     <CardHeader>
                                         <CardTitle>Order Summary</CardTitle>
@@ -469,11 +793,162 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                                         <div className="space-y-4">
                                             <div className="flex justify-between">
                                                 <span>Subtotal ({getTotalItems()} items)</span>
-                                                <span>${getTotalPrice().toFixed(2)}</span>
+                                                <span>${getSubtotal().toFixed(2)}</span>
                                             </div>
                                             <div className="flex justify-between">
                                                 <span>Shipping</span>
-                                                <span>Free</span>
+                                                <span className={selectedShippingOption ? 'text-green-600 font-medium' : 'text-gray-500 text-sm'}>
+                                                    {selectedShippingOption ? `$${selectedShippingOption.cost.toFixed(2)}` : 'Calculate below'}
+                                                </span>
+                                            </div>
+                                            
+                                            {/* Shipping Estimation Section - Moved here for better UX flow */}
+                                            <div className="border-t pt-4">
+                                                <div className="space-y-3">
+                                                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                                        Calculate Shipping
+                                                    </label>
+                                                    
+                                                    {/* Country Selection */}
+                                                    <div className="space-y-1">
+                                                        <label className="text-xs text-gray-600 dark:text-gray-400">
+                                                            Country
+                                                        </label>
+                                                        <Select 
+                                                            value={selectedCountry} 
+                                                            onValueChange={(value) => {
+                                                                setSelectedCountry(value);
+                                                                setShippingError(null);
+                                                                setShippingSuccess(null);
+                                                                setShippingOptions([]);
+                                                                setSelectedShippingOption(null);
+                                                            }}
+                                                        >
+                                                            <SelectTrigger className="w-full">
+                                                                <SelectValue placeholder="Select a country" />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="United States">United States</SelectItem>
+                                                                <SelectItem value="Canada">Canada</SelectItem>
+                                                                <SelectItem value="United Kingdom">United Kingdom</SelectItem>
+                                                                <SelectItem value="Germany">Germany</SelectItem>
+                                                                <SelectItem value="France">France</SelectItem>
+                                                                <SelectItem value="Australia">Australia</SelectItem>
+                                                                <SelectItem value="Japan">Japan</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    
+                                                    {/* ZIP Code and Calculate Button */}
+                                                    <div className="flex space-x-2">
+                                                        <div className="flex-1">
+                                                            <label className="text-xs text-gray-600 dark:text-gray-400">
+                                                                {selectedCountry === 'Canada' ? 'Postal Code' : 'ZIP Code'}
+                                                            </label>
+                                                            <Input
+                                                                type="text"
+                                                                placeholder={
+                                                                    selectedCountry === 'Canada' ? 'K1A 0A6' : 
+                                                                    selectedCountry === 'United States' ? '12345' :
+                                                                    'Enter postal code'
+                                                                }
+                                                                className="mt-1 shipping-input"
+                                                                id="zip-code"
+                                                                maxLength={10}
+                                                                onChange={() => {
+                                                                    setShippingError(null);
+                                                                    setShippingSuccess(null);
+                                                                    setShippingOptions([]);
+                                                                    setSelectedShippingOption(null);
+                                                                }}
+                                                            />
+                                                        </div>
+                                                        <div className="flex items-end">
+                                                            <Button
+                                                                type="button"
+                                                                variant="outline"
+                                                                size="sm"
+                                                                disabled={shippingProcessing || !selectedCountry}
+                                                                onClick={() => {
+                                                                    const zipCode = (document.getElementById('zip-code') as HTMLInputElement)?.value;
+                                                                    if (zipCode && selectedCountry) {
+                                                                        handleEstimateShipping(zipCode, selectedCountry);
+                                                                    }
+                                                                }}
+                                                            >
+                                                                {shippingProcessing ? 'Calculating...' : 'Calculate'}
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {/* Shipping Error Alert */}
+                                                    {shippingError && (
+                                                        <Alert variant="destructive">
+                                                            <AlertCircleIcon />
+                                                            <AlertTitle>Shipping Error</AlertTitle>
+                                                            <AlertDescription>
+                                                                {shippingError}
+                                                            </AlertDescription>
+                                                        </Alert>
+                                                    )}
+
+                                                    {/* Shipping Success Alert */}
+                                                    {shippingSuccess && (
+                                                        <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+                                                            <AlertTitle>Shipping Available</AlertTitle>
+                                                            <AlertDescription>
+                                                                {shippingSuccess}
+                                                            </AlertDescription>
+                                                        </Alert>
+                                                    )}
+
+                                                    {/* Shipping Options Selection */}
+                                                    {shippingOptions.length > 0 && (
+                                                        <div className="mt-4">
+                                                            <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 block">
+                                                                Choose Shipping Method
+                                                            </label>
+                                                            <div className="space-y-2">
+                                                                {shippingOptions.map((option, index) => (
+                                                                    <div 
+                                                                        key={index} 
+                                                                        className={`flex items-center space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                                                                            selectedShippingOption?.name === option.name
+                                                                                ? 'border-blue-500 bg-blue-50 dark:bg-blue-950'
+                                                                                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
+                                                                        }`}
+                                                                        onClick={() => setSelectedShippingOption(option)}
+                                                                    >
+                                                                        <input
+                                                                            type="radio"
+                                                                            id={`shipping-${index}`}
+                                                                            name="shipping"
+                                                                            value={index}
+                                                                            checked={selectedShippingOption?.name === option.name}
+                                                                            onChange={() => setSelectedShippingOption(option)}
+                                                                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                                                                        />
+                                                                        <div className="flex-1">
+                                                                            <div className="flex justify-between items-center">
+                                                                                <div>
+                                                                                    <div className="font-medium text-gray-900 dark:text-white">
+                                                                                        {option.name}
+                                                                                    </div>
+                                                                                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                                                                                        {option.estimated_days}
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div className="font-bold text-blue-600">
+                                                                                    ${option.cost.toFixed(2)}
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
                                             
                                             {/* Coupon Code Section */}
@@ -522,117 +997,57 @@ export default function CartIndex({ cartItems, cartCount, errors }: Props) {
                                                 </div>
                                             </div>
                                             
-                                            {/* Shipping Estimation Section */}
-                                            <div className="border-t pt-4">
-                                                <div className="space-y-3">
-                                                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                                                        Estimate Shipping
-                                                    </label>
-                                                    
-                                                    {/* Country Selection */}
-                                                    <div className="space-y-1">
-                                                        <label className="text-xs text-gray-600 dark:text-gray-400">
-                                                            Country
-                                                        </label>
-                                                        <Select 
-                                                            value={selectedCountry} 
-                                                            onValueChange={(value) => {
-                                                                setSelectedCountry(value);
-                                                                setShippingError(null);
-                                                                setShippingSuccess(null);
-                                                            }}
-                                                        >
-                                                            <SelectTrigger className="w-full">
-                                                                <SelectValue placeholder="Select a country" />
-                                                            </SelectTrigger>
-                                                            <SelectContent>
-                                                                <SelectItem value="United States">United States</SelectItem>
-                                                                <SelectItem value="Canada">Canada</SelectItem>
-                                                                <SelectItem value="United Kingdom">United Kingdom</SelectItem>
-                                                                <SelectItem value="Germany">Germany</SelectItem>
-                                                                <SelectItem value="France">France</SelectItem>
-                                                                <SelectItem value="Australia">Australia</SelectItem>
-                                                                <SelectItem value="Japan">Japan</SelectItem>
-                                                            </SelectContent>
-                                                        </Select>
-                                                    </div>
-                                                    
-                                                    {/* ZIP Code and Estimate Button */}
-                                                    <div className="flex space-x-2">
-                                                        <div className="flex-1">
-                                                            <label className="text-xs text-gray-600 dark:text-gray-400">
-                                                                ZIP/Postal Code
-                                                            </label>
-                                                            <Input
-                                                                type="text"
-                                                                placeholder="Enter ZIP code"
-                                                                className="mt-1"
-                                                                id="zip-code"
-                                                                maxLength={10}
-                                                                onChange={() => {
-                                                                    setShippingError(null);
-                                                                    setShippingSuccess(null);
-                                                                }}
-                                                            />
-                                                        </div>
-                                                        <div className="flex items-end">
-                                                            <Button
-                                                                type="button"
-                                                                variant="outline"
-                                                                size="sm"
-                                                                disabled={shippingProcessing}
-                                                                onClick={() => {
-                                                                    const zipCode = (document.getElementById('zip-code') as HTMLInputElement)?.value;
-                                                                    if (zipCode) {
-                                                                        handleEstimateShipping(zipCode, selectedCountry);
-                                                                    }
-                                                                }}
-                                                            >
-                                                                Estimate
-                                                            </Button>
-                                                        </div>
-                                                    </div>
-                                                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                                                        Get shipping estimates for your location
-                                                    </p>
-                                                    
-                                                    {/* Shipping Error Alert */}
-                                                    {shippingError && (
-                                                        <Alert variant="destructive">
-                                                            <AlertCircleIcon />
-                                                            <AlertTitle>Shipping Error</AlertTitle>
-                                                            <AlertDescription>
-                                                                {shippingError}
-                                                            </AlertDescription>
-                                                        </Alert>
-                                                    )}
-
-                                                    {/* Shipping Success Alert */}
-                                                    {shippingSuccess && (
-                                                        <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
-                                                            <AlertTitle>Shipping Estimated</AlertTitle>
-                                                            <AlertDescription>
-                                                                {shippingSuccess}
-                                                            </AlertDescription>
-                                                        </Alert>
-                                                    )}
-                                                </div>
-                                            </div>
                                             
                                             <div className="border-t pt-4">
                                                 <div className="flex justify-between font-bold text-lg">
                                                     <span>Total</span>
                                                     <span>${getTotalPrice().toFixed(2)}</span>
                                                 </div>
+                                                {selectedShippingOption && (
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                                        Includes ${selectedShippingOption.cost.toFixed(2)} shipping via {selectedShippingOption.name}
+                                                    </p>
+                                                )}
                                             </div>
-                                            <Button 
-                                                className="w-full" 
-                                                size="lg"
-                                                disabled={processing}
-                                                onClick={handleCheckout}
-                                            >
-                                                Proceed to Checkout
-                                            </Button>
+                                            {!checkoutSuccess ? (
+                                                <Button 
+                                                    className="w-full" 
+                                                    size="lg"
+                                                    disabled={processing || checkoutProcessing}
+                                                    onClick={handleCheckout}
+                                                >
+                                                    {checkoutProcessing ? (
+                                                        <div className="flex items-center space-x-2">
+                                                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                                            <span>{checkoutStep || 'Processing...'}</span>
+                                                        </div>
+                                                    ) : selectedShippingOption ? (
+                                                        `Checkout • $${getTotalPrice().toFixed(2)}`
+                                                    ) : (
+                                                        'Proceed to Checkout'
+                                                    )}
+                                                </Button>
+                                            ) : (
+                                                <div className="text-center space-y-3">
+                                                    <div className="flex items-center justify-center space-x-2 text-green-600">
+                                                        <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                        </svg>
+                                                        <span className="font-semibold">Order Completed!</span>
+                                                    </div>
+                                                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                                                        Thank you for your purchase! Your order has been processed successfully and your cart has been cleared.
+                                                    </p>
+                                                    <Button 
+                                                        className="w-full" 
+                                                        size="lg"
+                                                        variant="outline"
+                                                        onClick={() => window.location.href = '/'}
+                                                    >
+                                                        Continue Shopping
+                                                    </Button>
+                                                </div>
+                                            )}
                                         </div>
                                     </CardContent>
                                 </Card>

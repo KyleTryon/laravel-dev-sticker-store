@@ -303,12 +303,15 @@ class OrderController extends Controller
             ], 400);
         }
 
-        if ($country !== 'United States') {
-            Log::error('Shipping estimation failed - non-US country', [
+        // Check if country is supported (US or Canada)
+        $supportedCountries = ['United States', 'Canada'];
+        if (!in_array($country, $supportedCountries)) {
+            Log::error('Shipping estimation failed - unsupported country', [
                 'zip_code' => $zipCode,
                 'country' => $country,
                 'user_id' => $userId,
                 'user_type' => 'guest',
+                'supported_countries' => $supportedCountries,
                 'cart_context' => [
                     'items_count' => count($cart),
                     'total_items' => array_sum(array_column($cart, 'quantity')),
@@ -323,46 +326,58 @@ class OrderController extends Controller
             
             return response()->json([
                 'error' => 'International shipping to ' . $country . ' is not currently supported',
-                'message' => 'We only ship to the United States at this time'
+                'message' => 'We currently only ship to the United States and Canada'
             ], 400);
         }
 
-        if (preg_match('/[X]/', $zipCode)) {
-            Log::error('Shipping estimation failed - corrupted ZIP code', [
-                'zip_code' => $zipCode,
-                'country' => $country,
-                'user_id' => $userId,
-                'user_type' => 'guest',
-                'cart_context' => [
-                    'items_count' => count($cart),
-                    'total_items' => array_sum(array_column($cart, 'quantity')),
-                    'total_value' => array_sum(array_map(function($item) {
-                        return $item['product']['price'] * $item['quantity'];
-                    }, $cart)),
-                ],
-                'session_id' => session()->getId(),
-                'shipping_service' => 'test_shipping_api',
-                'error_type' => 'invalid_zip_code_format'
-            ]);
-            
-            return response()->json([
-                'error' => 'Invalid ZIP code format detected. Please enter only numbers',
-                'message' => 'ZIP code contains invalid characters'
-            ], 400);
-        }
+        // Validate postal code format based on country
+        if ($country === 'United States') {
+            // US ZIP code validation
+            if (preg_match('/[X]/', $zipCode)) {
+                Log::error('Shipping estimation failed - corrupted US ZIP code', [
+                    'zip_code' => $zipCode,
+                    'country' => $country,
+                    'user_id' => $userId,
+                    'user_type' => 'guest',
+                    'error_type' => 'invalid_us_zip_format'
+                ]);
+                
+                return response()->json([
+                    'error' => 'Invalid US ZIP code format detected. Please enter only numbers',
+                    'message' => 'ZIP code contains invalid characters'
+                ], 400);
+            }
 
-        if (strlen($zipCode) < 5) {
-            Log::warning('Shipping estimation failed - invalid ZIP code length', [
-                'zip_code' => $zipCode,
-                'zip_length' => strlen($zipCode),
-                'country' => $country,
-                'user_id' => $userId,
-            ]);
-            
-            return response()->json([
-                'error' => 'Please enter a valid 5-digit ZIP code',
-                'message' => 'ZIP code must be at least 5 digits'
-            ], 400);
+            if (strlen($zipCode) < 5) {
+                Log::warning('Shipping estimation failed - invalid US ZIP code length', [
+                    'zip_code' => $zipCode,
+                    'zip_length' => strlen($zipCode),
+                    'country' => $country,
+                    'user_id' => $userId,
+                ]);
+                
+                return response()->json([
+                    'error' => 'Please enter a valid 5-digit US ZIP code',
+                    'message' => 'ZIP code must be at least 5 digits'
+                ], 400);
+            }
+        } elseif ($country === 'Canada') {
+            // Canadian postal code validation (format: A1A 1A1 or A1A1A1)
+            $cleanedPostalCode = strtoupper(str_replace(' ', '', $zipCode));
+            if (!preg_match('/^[A-Z]\d[A-Z]\d[A-Z]\d$/', $cleanedPostalCode)) {
+                Log::warning('Shipping estimation failed - invalid Canadian postal code', [
+                    'postal_code' => $zipCode,
+                    'cleaned_postal_code' => $cleanedPostalCode,
+                    'country' => $country,
+                    'user_id' => $userId,
+                    'error_type' => 'invalid_canadian_postal_code'
+                ]);
+                
+                return response()->json([
+                    'error' => 'Please enter a valid Canadian postal code (e.g., K1A 0A6)',
+                    'message' => 'Canadian postal code must be in format A1A 1A1'
+                ], 400);
+            }
         }
 
 
@@ -382,16 +397,18 @@ class OrderController extends Controller
             'shipping_service' => 'test_shipping_api',
         ]);
 
-        $standardShipping = 5.99;
-        $expeditedShipping = 12.99;
+        // Set fixed $8.99 shipping for US and Canada as requested
+        $standardShipping = 8.99;
+        $expeditedShipping = 16.99;  // Premium option remains higher
         
-        if (preg_match('/^(9|8)/', $zipCode)) {
-            $standardShipping = 7.99;
-            $expeditedShipping = 15.99;
-        } elseif (preg_match('/^(0|1)/', $zipCode)) {
-            $standardShipping = 4.99;
-            $expeditedShipping = 10.99;
-        }
+        // Log the country-specific shipping calculation
+        Log::info('Shipping costs calculated for US/Canada', [
+            'country' => $country,
+            'zip_code' => $zipCode,
+            'standard_shipping' => $standardShipping,
+            'expedited_shipping' => $expeditedShipping,
+            'user_id' => $userId
+        ]);
 
         return response()->json([
             'success' => true,
@@ -486,6 +503,39 @@ class OrderController extends Controller
         return response()->json([
             'success' => 'Order placed successfully',
             'order_id' => $order->id
+        ]);
+    }
+
+    public function clearCart(Request $request)
+    {
+        $cart = session()->get('cart', []);
+        $cartItemCount = count($cart);
+        $totalItems = array_sum(array_column($cart, 'quantity'));
+        $totalValue = array_sum(array_map(function($item) {
+            return $item['product']['price'] * $item['quantity'];
+        }, $cart));
+
+        // Clear the cart session
+        session()->forget('cart');
+
+        // Log cart clearing for tracking
+        Log::info('Cart cleared after order completion', [
+            'previous_cart_items' => $cartItemCount,
+            'previous_total_items' => $totalItems,
+            'previous_total_value' => $totalValue,
+            'user_id' => 'guest',
+            'user_type' => 'guest',
+            'timestamp' => now()->toISOString(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cart cleared successfully',
+            'previous_cart_info' => [
+                'items' => $cartItemCount,
+                'total_quantity' => $totalItems,
+                'total_value' => $totalValue
+            ]
         ]);
     }
 
