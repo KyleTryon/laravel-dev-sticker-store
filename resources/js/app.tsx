@@ -23,6 +23,15 @@ Sentry.init({
             // Additional SDK configuration goes in here, for example:
             maskAllText: false,
             blockAllMedia: false,
+            // Mask sensitive input fields like zip codes and postal codes
+            mask: [
+                'input[id="zip-code"]',
+                'input[name="zip_code"]', 
+                'input[name="postal_code"]',
+                'input[placeholder*="ZIP"]',
+                'input[placeholder*="postal"]',
+                '.shipping-input'
+            ],
         }),
     ],
 

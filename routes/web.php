@@ -18,6 +18,7 @@ Route::delete('/cart/remove', [OrderController::class, 'removeFromCart'])->name(
 Route::patch('/cart/update', [OrderController::class, 'updateCartQuantity'])->name('cart.update');
 Route::post('/cart/apply-coupon', [OrderController::class, 'applyCoupon'])->name('cart.apply-coupon');
 Route::post('/cart/estimate-shipping', [OrderController::class, 'estimateShipping'])->name('cart.estimate-shipping');
+Route::delete('/cart/clear', [OrderController::class, 'clearCart'])->name('cart.clear');
 
 // Authenticated user routes
 Route::middleware(['auth', 'verified'])->group(function () {
