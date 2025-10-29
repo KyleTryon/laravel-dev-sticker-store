@@ -146,7 +146,7 @@ export default function Welcome({ products }: Props) {
                                 <CardContent className="p-4">
                                     <div className="flex items-center justify-between mb-2">
                                         <CardTitle className="text-lg">{product.name}</CardTitle>
-                                        <Badge variant="secondary">{product.category}</Badge>
+                                        {product.category && <Badge variant="secondary">{product.category}</Badge>}
                                     </div>
                                     <p className="text-gray-600 dark:text-gray-300 text-sm mb-3 line-clamp-2">
                                         {product.description}
