@@ -68,7 +68,7 @@ class OrderController extends Controller
                     'price' => $product->price,
                     'image_url' => $product->image_url,
                     'stock_quantity' => $product->stock_quantity,
-                    'category' => $product->category,
+                    'category' => $product->category ?? '',
                 ],
                 'quantity' => $validated['quantity'],
             ];
